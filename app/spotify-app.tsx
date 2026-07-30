@@ -13,6 +13,7 @@ import {
   LoaderCircle,
   LogOut,
   Music2,
+  Pause,
   Play,
   RefreshCw,
   Search,
@@ -202,6 +203,7 @@ function ReleasesView() {
   const [scanComplete, setScanComplete] = useState(
     () => releaseMemoryCache?.complete || false,
   );
+  const [paused, setPaused] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
@@ -212,6 +214,7 @@ function ReleasesView() {
     scanController.current?.abort();
     const controller = new AbortController();
     scanController.current = controller;
+    setPaused(false);
 
     const resumable =
       releaseMemoryCache &&
@@ -243,12 +246,18 @@ function ReleasesView() {
 
     try {
       while (true) {
+        if (controller.signal.aborted) {
+          throw new DOMException("The release scan was paused.", "AbortError");
+        }
         const data = await getJson<ReleaseBatch>(
           cursor
             ? `/api/releases?after=${encodeURIComponent(cursor)}`
             : "/api/releases",
           { signal: controller.signal },
         );
+        if (controller.signal.aborted) {
+          throw new DOMException("The release scan was paused.", "AbortError");
+        }
 
         for (const release of data.releases) merged.set(release.id, release);
         scanned += data.scannedArtists;
@@ -276,7 +285,10 @@ function ReleasesView() {
         setScannedArtists(scanned);
         setScanComplete(snapshot.complete);
 
-        if (!nextCursor) break;
+        if (!nextCursor) {
+          setPaused(false);
+          break;
+        }
         cursor = nextCursor;
       }
     } catch (scanError) {
@@ -293,6 +305,14 @@ function ReleasesView() {
         setLoading(false);
       }
     }
+  }, []);
+
+  const pauseScan = useCallback(() => {
+    const activeScan = scanController.current;
+    if (!activeScan) return;
+    setPaused(true);
+    setLoading(false);
+    activeScan.abort();
   }, []);
 
   useEffect(() => () => scanController.current?.abort(), []);
@@ -315,8 +335,8 @@ function ReleasesView() {
   }, [query, releases, sort]);
 
   const hasProgress = scannedArtists > 0;
-  const scanButtonLabel = loading
-    ? "Scanning…"
+  const scanButtonLabel = paused
+    ? "Continue scan"
     : scanComplete
       ? "Scan again"
       : hasProgress
@@ -364,15 +384,25 @@ function ReleasesView() {
             <option value="artist">Artist A–Z</option>
             <option value="title">Title A–Z</option>
           </select>
-          <button
-            className="secondary-button"
-            disabled={loading}
-            onClick={() => void scan()}
-            type="button"
-          >
-            <RefreshCw className={loading ? "spinner" : undefined} size={14} />
-            {scanButtonLabel}
-          </button>
+          {loading ? (
+            <button
+              className="secondary-button"
+              onClick={pauseScan}
+              type="button"
+            >
+              <Pause size={14} fill="currentColor" />
+              Pause scan
+            </button>
+          ) : (
+            <button
+              className="secondary-button"
+              onClick={() => void scan()}
+              type="button"
+            >
+              {paused ? <Play size={14} fill="currentColor" /> : <RefreshCw size={14} />}
+              {scanButtonLabel}
+            </button>
+          )}
         </div>
       </div>
       {loading && (
@@ -401,15 +431,23 @@ function ReleasesView() {
       )}
       {!loading && !error && !scanComplete && (
         <div className="empty">
-          <Sparkles size={28} />
-          <strong>{hasProgress ? "Your partial scan is saved." : "Check when you're ready."}</strong>
+          {paused ? <Pause size={28} /> : <Sparkles size={28} />}
+          <strong>
+            {paused
+              ? "Release scan paused."
+              : hasProgress
+                ? "Your partial scan is saved."
+                : "Check when you're ready."}
+          </strong>
           <span>
-            {hasProgress
-              ? `Continue from artist ${scannedArtists + 1}; completed batches will not be fetched again.`
-              : "No release requests are sent until you start the scan."}
+            {paused
+              ? "The active batch was stopped. No more Spotify requests are sent until you continue."
+              : hasProgress
+                ? `Continue from artist ${scannedArtists + 1}; completed batches will not be fetched again.`
+                : "No release requests are sent until you start the scan."}
           </span>
           <button className="primary-button" onClick={() => void scan()} type="button">
-            {hasProgress ? "Continue release scan" : "Check for new releases"}
+            {paused || hasProgress ? "Continue release scan" : "Check for new releases"}
             <ArrowRight size={15} />
           </button>
         </div>
