@@ -247,7 +247,7 @@ function ReleasesView() {
             value={query}
           />
         </label>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div className="toolbar-actions">
           <select
             aria-label="Sort releases"
             className="sort-select"
@@ -289,7 +289,14 @@ function ReleasesView() {
               key={release.id}
             >
               <div className="cover-wrap">
-                {release.images[0] && <img alt="" src={release.images[0].url} />}
+                {release.images[0] && (
+                  <img
+                    alt=""
+                    decoding="async"
+                    loading="lazy"
+                    src={(release.images[1] || release.images[0]).url}
+                  />
+                )}
               </div>
               <div className="release-actions">
                 <span className="release-badge">{release.album_type}</span>
@@ -509,7 +516,12 @@ function PlaylistsView() {
                 type="button"
               >
                 {playlist.images[0] ? (
-                  <img alt="" src={playlist.images[0].url} />
+                  <img
+                    alt=""
+                    decoding="async"
+                    loading="lazy"
+                    src={(playlist.images[1] || playlist.images[0]).url}
+                  />
                 ) : (
                   <div className="playlist-cover-placeholder"><Music2 size={20} /></div>
                 )}
@@ -528,7 +540,7 @@ function PlaylistsView() {
             <div className="playlist-panel-head">
               <div>
                 <h2>{selected?.name}</h2>
-                <p>{items.length} loaded items · click any column to sort</p>
+                <p>{items.length} loaded items · sort by any column</p>
               </div>
               <div className="panel-actions">
                 {selected && (
@@ -573,7 +585,7 @@ function PlaylistsView() {
                 </button>
               </div>
             </div>
-            <div className="toolbar" style={{ margin: 0, padding: "12px 18px" }}>
+            <div className="toolbar playlist-toolbar">
               <label className="search">
                 <Search size={15} color="var(--dim)" />
                 <input
@@ -608,6 +620,36 @@ function PlaylistsView() {
                 )}
               </div>
             ) : (
+              <>
+              <div className="mobile-table-tools">
+                <label>
+                  <span>Sort tracks</span>
+                  <select
+                    onChange={(event) => {
+                      setSortKey(event.target.value as SortKey);
+                      setDescending(false);
+                    }}
+                    value={sortKey}
+                  >
+                    <option value="position">Playlist position</option>
+                    <option value="name">Track name</option>
+                    <option value="artist">Artist</option>
+                    <option value="album">Album</option>
+                    <option value="duration">Duration</option>
+                    <option value="release">Release date</option>
+                    <option value="added">Date added</option>
+                  </select>
+                </label>
+                <button
+                  aria-label={`Sort ${descending ? "ascending" : "descending"}`}
+                  className="secondary-button"
+                  onClick={() => setDescending((current) => !current)}
+                  type="button"
+                >
+                  <ArrowUpDown size={14} />
+                  {descending ? "Descending" : "Ascending"}
+                </button>
+              </div>
               <div className="table-scroll">
                 <table className="track-table">
                   <thead>
@@ -636,8 +678,8 @@ function PlaylistsView() {
                       const playbackKey = `track:${entry.key}`;
                       return (
                       <tr key={entry.key}>
-                        <td>{index + 1}</td>
-                        <td className="track-title">
+                        <td data-label="Position">{index + 1}</td>
+                        <td className="track-title" data-label="Track">
                           {entry.item.external_urls?.spotify ? (
                             <a
                               href={entry.item.external_urls.spotify}
@@ -649,12 +691,12 @@ function PlaylistsView() {
                           ) : entry.item.name}
                           {entry.item.explicit && <span className="explicit">E</span>}
                         </td>
-                        <td>{entry.item.artists?.map((artist) => artist.name).join(", ") || "—"}</td>
-                        <td>{entry.item.album?.name || "—"}</td>
-                        <td>{entry.item.duration_ms ? formatDuration(entry.item.duration_ms) : "—"}</td>
-                        <td>{formatDate(entry.item.album?.release_date)}</td>
-                        <td>{formatDate(entry.added_at)}</td>
-                        <td className="track-actions">
+                        <td data-label="Artist">{entry.item.artists?.map((artist) => artist.name).join(", ") || "—"}</td>
+                        <td data-label="Album">{entry.item.album?.name || "—"}</td>
+                        <td data-label="Duration">{entry.item.duration_ms ? formatDuration(entry.item.duration_ms) : "—"}</td>
+                        <td data-label="Released">{formatDate(entry.item.album?.release_date)}</td>
+                        <td data-label="Added">{formatDate(entry.added_at)}</td>
+                        <td className="track-actions" data-label="Listen">
                           <button
                             aria-label={`Play ${entry.item.name} in this browser`}
                             disabled={
@@ -693,6 +735,7 @@ function PlaylistsView() {
                   </tbody>
                 </table>
               </div>
+              </>
             )}
           </section>
         </div>
@@ -730,7 +773,7 @@ export function SpotifyApp() {
 
   if (checking) {
     return (
-      <div className="loading-state" style={{ border: 0, minHeight: "100vh" }}>
+      <div className="loading-state full-screen-state" style={{ border: 0 }}>
         <LoaderCircle className="spinner" size={28} />Opening your desk
       </div>
     );

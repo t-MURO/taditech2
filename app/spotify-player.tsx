@@ -457,6 +457,17 @@ export function PlaybackProvider({
                 : error || "Choose Play on any release or playlist track."}
             </span>
           </div>
+          {currentTrack && currentTrackUrl && (
+            <a
+              aria-label={`Open current ${spotifyItemKind(currentTrack.uri)} in Spotify`}
+              className="player-mobile-open"
+              href={currentTrackUrl}
+              rel="noreferrer"
+              target="_blank"
+            >
+              <ExternalLink size={17} />
+            </a>
+          )}
         </div>
 
         {reconnectRequired ? (
