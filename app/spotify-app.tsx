@@ -8,6 +8,7 @@ import {
   ChevronRight,
   CircleUserRound,
   Clock3,
+  Columns3,
   ExternalLink,
   ListMusic,
   LoaderCircle,
@@ -20,8 +21,20 @@ import {
   Shuffle,
   Sparkles,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { preferredSpotifyImage } from "@/lib/spotify-data";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import {
+  preferredSpotifyImage,
+  type NormalizedSpotifyTrack,
+  type NormalizedSpotifyUserReference,
+  type SpotifyImage,
+} from "@/lib/spotify-data";
 import { PlaybackProvider, usePlayback } from "./spotify-player";
 
 type User = {
@@ -49,37 +62,88 @@ type Playlist = {
   external_urls: { spotify: string };
   itemCount: number;
 };
-type Track = {
-  id: string | null;
-  uri: string;
-  name: string;
-  type: string;
-  duration_ms?: number;
-  explicit?: boolean;
-  external_urls?: { spotify: string };
-  artists?: Array<{ id: string; name: string }>;
-  album?: {
-    id: string;
-    name: string;
-    release_date?: string;
-  };
-};
 type PlaylistItem = {
   key: string;
   originalIndex: number;
   position: number;
   added_at: string | null;
+  added_by?: NormalizedSpotifyUserReference | null;
   is_local: boolean;
-  item: Track;
+  item: NormalizedSpotifyTrack;
 };
-type SortKey =
+type ColumnId =
   | "position"
-  | "name"
+  | "track"
   | "artist"
   | "album"
   | "duration"
   | "release"
-  | "added";
+  | "added"
+  | "trackNumber"
+  | "discNumber"
+  | "explicit"
+  | "itemType"
+  | "local"
+  | "trackLocal"
+  | "playable"
+  | "restriction"
+  | "addedBy"
+  | "addedByUri"
+  | "addedByHref"
+  | "addedByType"
+  | "addedBySpotifyUrl"
+  | "releasePrecision"
+  | "albumType"
+  | "albumObjectType"
+  | "albumTotalTracks"
+  | "albumArtists"
+  | "albumCover"
+  | "albumImageUrls"
+  | "albumImageWidths"
+  | "albumImageHeights"
+  | "albumRestriction"
+  | "trackId"
+  | "trackUri"
+  | "trackHref"
+  | "trackSpotifyUrl"
+  | "previewUrl"
+  | "isrc"
+  | "ean"
+  | "upc"
+  | "artistIds"
+  | "artistUris"
+  | "artistHrefs"
+  | "artistTypes"
+  | "artistSpotifyUrls"
+  | "albumArtistIds"
+  | "albumArtistUris"
+  | "albumArtistHrefs"
+  | "albumArtistTypes"
+  | "albumArtistSpotifyUrls"
+  | "albumId"
+  | "albumUri"
+  | "albumHref"
+  | "albumSpotifyUrl";
+
+type ColumnGroup =
+  | "Essentials"
+  | "Track"
+  | "Playlist"
+  | "Album"
+  | "Identifiers"
+  | "Links";
+type SortValue = string | number | boolean | null | undefined;
+type TrackColumn = {
+  id: ColumnId;
+  label: string;
+  sortLabel?: string;
+  group: ColumnGroup;
+  defaultVisible?: boolean;
+  required?: boolean;
+  className?: string;
+  getSortValue?: (entry: PlaylistItem) => SortValue;
+  render: (entry: PlaylistItem, displayIndex: number) => ReactNode;
+};
 
 type ReleaseScanSnapshot = {
   releases: Release[];
@@ -99,6 +163,8 @@ type ReleaseBatch = {
 };
 
 let releaseMemoryCache: ReleaseScanSnapshot | undefined;
+const EMPTY_VALUE = "\u2014";
+const COLUMN_STORAGE_KEY = "taditech-playlist-columns-v1";
 
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -114,12 +180,643 @@ function formatDuration(ms = 0) {
 }
 
 function formatDate(date?: string | null) {
-  if (!date) return "—";
+  if (!date) return EMPTY_VALUE;
+  const dateOnly = /^\d{4}(?:-\d{2})?(?:-\d{2})?$/.test(date);
+  const normalized =
+    date.length === 4
+      ? `${date}-01-01`
+      : date.length === 7
+        ? `${date}-01`
+        : date;
+  const parsed = new Date(dateOnly ? `${normalized}T00:00:00Z` : normalized);
+  if (Number.isNaN(parsed.getTime())) return date;
   return new Intl.DateTimeFormat("en", {
     day: "2-digit",
     month: "short",
     year: "numeric",
-  }).format(new Date(date.length === 4 ? `${date}-01-01` : date));
+    ...(dateOnly ? { timeZone: "UTC" } : {}),
+  }).format(parsed);
+}
+
+function formatReleaseDate(date?: string | null, precision?: string) {
+  if (!date) return EMPTY_VALUE;
+  if (precision === "year" || date.length === 4) return date;
+  if (precision === "month" || date.length === 7) {
+    const parsed = new Date(`${date.slice(0, 7)}-01T00:00:00Z`);
+    if (Number.isNaN(parsed.getTime())) return date;
+    return new Intl.DateTimeFormat("en", {
+      month: "short",
+      year: "numeric",
+      timeZone: "UTC",
+    }).format(parsed);
+  }
+  return formatDate(date);
+}
+
+function titleCase(value: string) {
+  return value
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function displayText(value?: string | null) {
+  return value?.trim() || EMPTY_VALUE;
+}
+
+function displayNumber(value?: number) {
+  return value === undefined ? EMPTY_VALUE : String(value);
+}
+
+function displayBoolean(value?: boolean) {
+  return value === undefined ? EMPTY_VALUE : value ? "Yes" : "No";
+}
+
+function metadataCode(value?: string | null) {
+  if (!value?.trim()) return EMPTY_VALUE;
+  return <code className="metadata-code" title={value}>{value}</code>;
+}
+
+function spotifyTrackUri(track: NormalizedSpotifyTrack) {
+  return track.uri.startsWith("spotify:unavailable:") ? undefined : track.uri;
+}
+
+function joinedValues(values?: Array<string | undefined>) {
+  const joined = values?.filter((value): value is string => Boolean(value)).join(", ");
+  return joined || undefined;
+}
+
+function imageDimensions(
+  images: SpotifyImage[],
+  key: "height" | "width",
+) {
+  if (!images.length) return undefined;
+  return images
+    .map((image) => {
+      const value = image[key];
+      return value === null ? "Unknown" : value === undefined ? EMPTY_VALUE : String(value);
+    })
+    .join(", ");
+}
+
+function renderArtists(artists?: NormalizedSpotifyTrack["artists"]) {
+  if (!artists?.length) return EMPTY_VALUE;
+  return artists.map((artist, index) => (
+    <span key={`${artist.id || artist.name}:${index}`}>
+      {index > 0 ? ", " : ""}
+      {artist.external_urls?.spotify ? (
+        <a href={artist.external_urls.spotify} rel="noreferrer" target="_blank">
+          {artist.name}
+        </a>
+      ) : artist.name}
+    </span>
+  ));
+}
+
+const TRACK_COLUMNS: TrackColumn[] = [
+  {
+    id: "position",
+    label: "#",
+    sortLabel: "Playlist position",
+    group: "Essentials",
+    defaultVisible: true,
+    required: true,
+    getSortValue: (entry) => entry.position,
+    render: (_entry, displayIndex) => displayIndex + 1,
+  },
+  {
+    id: "track",
+    label: "Track",
+    sortLabel: "Track name",
+    group: "Essentials",
+    defaultVisible: true,
+    required: true,
+    className: "track-title",
+    getSortValue: (entry) => entry.item.name.toLocaleLowerCase(),
+    render: (entry) => (
+      <>
+        {entry.item.external_urls?.spotify ? (
+          <a href={entry.item.external_urls.spotify} rel="noreferrer" target="_blank">
+            {entry.item.name}
+          </a>
+        ) : entry.item.name}
+        {entry.item.explicit && <span className="explicit">E</span>}
+      </>
+    ),
+  },
+  {
+    id: "artist",
+    label: "Artists",
+    group: "Essentials",
+    defaultVisible: true,
+    getSortValue: (entry) =>
+      entry.item.artists?.map((artist) => artist.name).join(", ").toLocaleLowerCase(),
+    render: (entry) => renderArtists(entry.item.artists),
+  },
+  {
+    id: "album",
+    label: "Album",
+    group: "Essentials",
+    defaultVisible: true,
+    getSortValue: (entry) => entry.item.album?.name.toLocaleLowerCase(),
+    render: (entry) => {
+      const album = entry.item.album;
+      if (!album) return EMPTY_VALUE;
+      return album.external_urls?.spotify ? (
+        <a href={album.external_urls.spotify} rel="noreferrer" target="_blank">
+          {album.name}
+        </a>
+      ) : album.name;
+    },
+  },
+  {
+    id: "duration",
+    label: "Time",
+    sortLabel: "Duration",
+    group: "Essentials",
+    defaultVisible: true,
+    getSortValue: (entry) => entry.item.duration_ms,
+    render: (entry) =>
+      entry.item.duration_ms === undefined
+        ? EMPTY_VALUE
+        : formatDuration(entry.item.duration_ms),
+  },
+  {
+    id: "release",
+    label: "Released",
+    sortLabel: "Release date",
+    group: "Essentials",
+    defaultVisible: true,
+    getSortValue: (entry) => entry.item.album?.release_date,
+    render: (entry) =>
+      formatReleaseDate(
+        entry.item.album?.release_date,
+        entry.item.album?.release_date_precision,
+      ),
+  },
+  {
+    id: "added",
+    label: "Added",
+    sortLabel: "Date added",
+    group: "Essentials",
+    defaultVisible: true,
+    getSortValue: (entry) => entry.added_at,
+    render: (entry) => formatDate(entry.added_at),
+  },
+  {
+    id: "trackNumber",
+    label: "Track no.",
+    group: "Track",
+    getSortValue: (entry) => entry.item.track_number,
+    render: (entry) => displayNumber(entry.item.track_number),
+  },
+  {
+    id: "discNumber",
+    label: "Disc no.",
+    group: "Track",
+    getSortValue: (entry) => entry.item.disc_number,
+    render: (entry) => displayNumber(entry.item.disc_number),
+  },
+  {
+    id: "explicit",
+    label: "Explicit",
+    group: "Track",
+    getSortValue: (entry) => entry.item.explicit,
+    render: (entry) => displayBoolean(entry.item.explicit),
+  },
+  {
+    id: "itemType",
+    label: "Item type",
+    group: "Track",
+    getSortValue: (entry) => entry.item.type,
+    render: (entry) => titleCase(entry.item.type),
+  },
+  {
+    id: "playable",
+    label: "Playable",
+    group: "Track",
+    getSortValue: (entry) => entry.item.is_playable,
+    render: (entry) => displayBoolean(entry.item.is_playable),
+  },
+  {
+    id: "trackLocal",
+    label: "Track local flag",
+    group: "Track",
+    getSortValue: (entry) => entry.item.is_local,
+    render: (entry) => displayBoolean(entry.item.is_local),
+  },
+  {
+    id: "restriction",
+    label: "Restriction",
+    group: "Track",
+    getSortValue: (entry) => entry.item.restrictions?.reason,
+    render: (entry) =>
+      entry.item.restrictions?.reason
+        ? titleCase(entry.item.restrictions.reason)
+        : EMPTY_VALUE,
+  },
+  {
+    id: "local",
+    label: "Local",
+    group: "Playlist",
+    getSortValue: (entry) => entry.is_local,
+    render: (entry) => displayBoolean(entry.is_local),
+  },
+  {
+    id: "addedBy",
+    label: "Added by",
+    group: "Playlist",
+    getSortValue: (entry) => entry.added_by?.id,
+    render: (entry) => {
+      const addedBy = entry.added_by;
+      if (!addedBy?.id) return EMPTY_VALUE;
+      return addedBy.external_urls?.spotify ? (
+        <a href={addedBy.external_urls.spotify} rel="noreferrer" target="_blank">
+          {addedBy.id}
+        </a>
+      ) : metadataCode(addedBy.id);
+    },
+  },
+  {
+    id: "addedByUri",
+    label: "Added-by URI",
+    group: "Playlist",
+    getSortValue: (entry) => entry.added_by?.uri,
+    render: (entry) => metadataCode(entry.added_by?.uri),
+  },
+  {
+    id: "addedByType",
+    label: "Added-by type",
+    group: "Playlist",
+    getSortValue: (entry) => entry.added_by?.type,
+    render: (entry) =>
+      entry.added_by?.type ? titleCase(entry.added_by.type) : EMPTY_VALUE,
+  },
+  {
+    id: "releasePrecision",
+    label: "Date precision",
+    group: "Album",
+    getSortValue: (entry) => entry.item.album?.release_date_precision,
+    render: (entry) => {
+      const precision = entry.item.album?.release_date_precision;
+      return precision ? titleCase(precision) : EMPTY_VALUE;
+    },
+  },
+  {
+    id: "albumType",
+    label: "Album type",
+    group: "Album",
+    getSortValue: (entry) => entry.item.album?.album_type,
+    render: (entry) => {
+      const type = entry.item.album?.album_type;
+      return type ? titleCase(type) : EMPTY_VALUE;
+    },
+  },
+  {
+    id: "albumObjectType",
+    label: "Album object type",
+    group: "Album",
+    getSortValue: (entry) => entry.item.album?.type,
+    render: (entry) => {
+      const type = entry.item.album?.type;
+      return type ? titleCase(type) : EMPTY_VALUE;
+    },
+  },
+  {
+    id: "albumTotalTracks",
+    label: "Album tracks",
+    group: "Album",
+    getSortValue: (entry) => entry.item.album?.total_tracks,
+    render: (entry) => displayNumber(entry.item.album?.total_tracks),
+  },
+  {
+    id: "albumArtists",
+    label: "Album artists",
+    group: "Album",
+    getSortValue: (entry) =>
+      entry.item.album?.artists
+        ?.map((artist) => artist.name)
+        .join(", ")
+        .toLocaleLowerCase(),
+    render: (entry) => renderArtists(entry.item.album?.artists),
+  },
+  {
+    id: "albumCover",
+    label: "Album cover",
+    group: "Album",
+    className: "album-cover-cell",
+    render: (entry) => {
+      const cover = preferredSpotifyImage(entry.item.album?.images);
+      return cover ? (
+        <img
+          alt=""
+          className="album-cover"
+          decoding="async"
+          loading="lazy"
+          src={cover}
+        />
+      ) : EMPTY_VALUE;
+    },
+  },
+  {
+    id: "albumImageUrls",
+    label: "Album image URLs",
+    group: "Album",
+    getSortValue: (entry) => entry.item.album?.images.map((image) => image.url).join(", "),
+    render: (entry) =>
+      metadataCode(entry.item.album?.images.map((image) => image.url).join(", ")),
+  },
+  {
+    id: "albumImageWidths",
+    label: "Image widths",
+    group: "Album",
+    getSortValue: (entry) =>
+      entry.item.album ? imageDimensions(entry.item.album.images, "width") : undefined,
+    render: (entry) =>
+      displayText(
+        entry.item.album
+          ? imageDimensions(entry.item.album.images, "width")
+          : undefined,
+      ),
+  },
+  {
+    id: "albumImageHeights",
+    label: "Image heights",
+    group: "Album",
+    getSortValue: (entry) =>
+      entry.item.album ? imageDimensions(entry.item.album.images, "height") : undefined,
+    render: (entry) =>
+      displayText(
+        entry.item.album
+          ? imageDimensions(entry.item.album.images, "height")
+          : undefined,
+      ),
+  },
+  {
+    id: "albumRestriction",
+    label: "Album restriction",
+    group: "Album",
+    getSortValue: (entry) => entry.item.album?.restrictions?.reason,
+    render: (entry) => {
+      const reason = entry.item.album?.restrictions?.reason;
+      return reason ? titleCase(reason) : EMPTY_VALUE;
+    },
+  },
+  {
+    id: "trackId",
+    label: "Track ID",
+    group: "Identifiers",
+    getSortValue: (entry) => entry.item.id,
+    render: (entry) => metadataCode(entry.item.id),
+  },
+  {
+    id: "trackUri",
+    label: "Track URI",
+    group: "Identifiers",
+    getSortValue: (entry) => spotifyTrackUri(entry.item),
+    render: (entry) => metadataCode(spotifyTrackUri(entry.item)),
+  },
+  {
+    id: "trackHref",
+    label: "Track API URL",
+    group: "Links",
+    getSortValue: (entry) => entry.item.href,
+    render: (entry) => metadataCode(entry.item.href),
+  },
+  {
+    id: "isrc",
+    label: "ISRC",
+    group: "Identifiers",
+    getSortValue: (entry) => entry.item.external_ids?.isrc,
+    render: (entry) => metadataCode(entry.item.external_ids?.isrc),
+  },
+  {
+    id: "ean",
+    label: "EAN",
+    group: "Identifiers",
+    getSortValue: (entry) => entry.item.external_ids?.ean,
+    render: (entry) => metadataCode(entry.item.external_ids?.ean),
+  },
+  {
+    id: "upc",
+    label: "UPC",
+    group: "Identifiers",
+    getSortValue: (entry) => entry.item.external_ids?.upc,
+    render: (entry) => metadataCode(entry.item.external_ids?.upc),
+  },
+  {
+    id: "artistIds",
+    label: "Artist IDs",
+    group: "Identifiers",
+    getSortValue: (entry) =>
+      entry.item.artists?.map((artist) => artist.id).filter(Boolean).join(", "),
+    render: (entry) =>
+      metadataCode(
+        entry.item.artists?.map((artist) => artist.id).filter(Boolean).join(", "),
+      ),
+  },
+  {
+    id: "artistUris",
+    label: "Artist URIs",
+    group: "Identifiers",
+    getSortValue: (entry) =>
+      entry.item.artists?.map((artist) => artist.uri).filter(Boolean).join(", "),
+    render: (entry) =>
+      metadataCode(
+        entry.item.artists?.map((artist) => artist.uri).filter(Boolean).join(", "),
+      ),
+  },
+  {
+    id: "artistTypes",
+    label: "Artist types",
+    group: "Identifiers",
+    getSortValue: (entry) =>
+      joinedValues(entry.item.artists?.map((artist) => artist.type)),
+    render: (entry) =>
+      metadataCode(joinedValues(entry.item.artists?.map((artist) => artist.type))),
+  },
+  {
+    id: "albumArtistIds",
+    label: "Album artist IDs",
+    group: "Identifiers",
+    getSortValue: (entry) =>
+      entry.item.album?.artists
+        ?.map((artist) => artist.id)
+        .filter(Boolean)
+        .join(", "),
+    render: (entry) =>
+      metadataCode(
+        entry.item.album?.artists
+          ?.map((artist) => artist.id)
+          .filter(Boolean)
+          .join(", "),
+      ),
+  },
+  {
+    id: "albumArtistUris",
+    label: "Album artist URIs",
+    group: "Identifiers",
+    getSortValue: (entry) =>
+      entry.item.album?.artists
+        ?.map((artist) => artist.uri)
+        .filter(Boolean)
+        .join(", "),
+    render: (entry) =>
+      metadataCode(
+        entry.item.album?.artists
+          ?.map((artist) => artist.uri)
+          .filter(Boolean)
+          .join(", "),
+      ),
+  },
+  {
+    id: "albumArtistTypes",
+    label: "Album artist types",
+    group: "Identifiers",
+    getSortValue: (entry) =>
+      joinedValues(entry.item.album?.artists?.map((artist) => artist.type)),
+    render: (entry) =>
+      metadataCode(
+        joinedValues(entry.item.album?.artists?.map((artist) => artist.type)),
+      ),
+  },
+  {
+    id: "albumId",
+    label: "Album ID",
+    group: "Identifiers",
+    getSortValue: (entry) => entry.item.album?.id,
+    render: (entry) => metadataCode(entry.item.album?.id),
+  },
+  {
+    id: "albumUri",
+    label: "Album URI",
+    group: "Identifiers",
+    getSortValue: (entry) => entry.item.album?.uri,
+    render: (entry) => metadataCode(entry.item.album?.uri),
+  },
+  {
+    id: "albumHref",
+    label: "Album API URL",
+    group: "Links",
+    getSortValue: (entry) => entry.item.album?.href,
+    render: (entry) => metadataCode(entry.item.album?.href),
+  },
+  {
+    id: "trackSpotifyUrl",
+    label: "Track Spotify URL",
+    group: "Links",
+    getSortValue: (entry) => entry.item.external_urls?.spotify,
+    render: (entry) => metadataCode(entry.item.external_urls?.spotify),
+  },
+  {
+    id: "previewUrl",
+    label: "Preview URL (legacy)",
+    group: "Links",
+    getSortValue: (entry) => entry.item.preview_url,
+    render: (entry) => metadataCode(entry.item.preview_url),
+  },
+  {
+    id: "artistHrefs",
+    label: "Artist API URLs",
+    group: "Links",
+    getSortValue: (entry) =>
+      joinedValues(entry.item.artists?.map((artist) => artist.href)),
+    render: (entry) =>
+      metadataCode(joinedValues(entry.item.artists?.map((artist) => artist.href))),
+  },
+  {
+    id: "artistSpotifyUrls",
+    label: "Artist Spotify URLs",
+    group: "Links",
+    getSortValue: (entry) =>
+      joinedValues(
+        entry.item.artists?.map((artist) => artist.external_urls?.spotify),
+      ),
+    render: (entry) =>
+      metadataCode(
+        joinedValues(
+          entry.item.artists?.map((artist) => artist.external_urls?.spotify),
+        ),
+      ),
+  },
+  {
+    id: "albumSpotifyUrl",
+    label: "Album Spotify URL",
+    group: "Links",
+    getSortValue: (entry) => entry.item.album?.external_urls?.spotify,
+    render: (entry) => metadataCode(entry.item.album?.external_urls?.spotify),
+  },
+  {
+    id: "albumArtistHrefs",
+    label: "Album artist API URLs",
+    group: "Links",
+    getSortValue: (entry) =>
+      joinedValues(entry.item.album?.artists?.map((artist) => artist.href)),
+    render: (entry) =>
+      metadataCode(
+        joinedValues(entry.item.album?.artists?.map((artist) => artist.href)),
+      ),
+  },
+  {
+    id: "albumArtistSpotifyUrls",
+    label: "Album artist Spotify URLs",
+    group: "Links",
+    getSortValue: (entry) =>
+      joinedValues(
+        entry.item.album?.artists?.map(
+          (artist) => artist.external_urls?.spotify,
+        ),
+      ),
+    render: (entry) =>
+      metadataCode(
+        joinedValues(
+          entry.item.album?.artists?.map(
+            (artist) => artist.external_urls?.spotify,
+          ),
+        ),
+      ),
+  },
+  {
+    id: "addedByHref",
+    label: "Added-by API URL",
+    group: "Links",
+    getSortValue: (entry) => entry.added_by?.href,
+    render: (entry) => metadataCode(entry.added_by?.href),
+  },
+  {
+    id: "addedBySpotifyUrl",
+    label: "Added-by Spotify URL",
+    group: "Links",
+    getSortValue: (entry) => entry.added_by?.external_urls?.spotify,
+    render: (entry) => metadataCode(entry.added_by?.external_urls?.spotify),
+  },
+];
+
+const DEFAULT_COLUMN_IDS = TRACK_COLUMNS
+  .filter((column) => column.defaultVisible)
+  .map((column) => column.id);
+const VALID_COLUMN_IDS = new Set(TRACK_COLUMNS.map((column) => column.id));
+const COLUMN_GROUPS: ColumnGroup[] = [
+  "Essentials",
+  "Track",
+  "Playlist",
+  "Album",
+  "Identifiers",
+  "Links",
+];
+
+function normalizeVisibleColumnIds(value: unknown): ColumnId[] {
+  const requested = Array.isArray(value)
+    ? new Set(
+        value.filter(
+          (column): column is ColumnId =>
+            typeof column === "string" && VALID_COLUMN_IDS.has(column as ColumnId),
+        ),
+      )
+    : new Set(DEFAULT_COLUMN_IDS);
+
+  return TRACK_COLUMNS
+    .filter((column) => column.required || requested.has(column.id))
+    .map((column) => column.id);
 }
 
 function Landing({ authError }: { authError: string }) {
@@ -581,7 +1278,7 @@ function ReleasesView() {
               </h3>
               <p>{release.artists.map((artist) => artist.name).join(", ")}</p>
               <div className="release-meta">
-                <span>{formatDate(release.release_date)}</span>
+                <span>{formatReleaseDate(release.release_date)}</span>
                 <span>{release.total_tracks} track{release.total_tracks === 1 ? "" : "s"}</span>
               </div>
             </article>
@@ -606,9 +1303,46 @@ function PlaylistsView() {
   const [error, setError] = useState("");
   const [playlistQuery, setPlaylistQuery] = useState("");
   const [query, setQuery] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("position");
+  const [sortKey, setSortKey] = useState<ColumnId>("position");
   const [descending, setDescending] = useState(false);
   const [toast, setToast] = useState("");
+  const [loadedPlaylistId, setLoadedPlaylistId] = useState<string | null>(null);
+  const [visibleColumnIds, setVisibleColumnIds] =
+    useState<ColumnId[]>(DEFAULT_COLUMN_IDS);
+  const itemLoadController = useRef<AbortController | null>(null);
+  const selectedPlaylistId = selected?.id ?? null;
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(COLUMN_STORAGE_KEY);
+      if (saved) setVisibleColumnIds(normalizeVisibleColumnIds(JSON.parse(saved)));
+    } catch {
+      // A blocked or malformed device preference should not block the playlist table.
+    }
+  }, []);
+
+  const updateVisibleColumns = useCallback((value: ColumnId[]) => {
+    const normalized = normalizeVisibleColumnIds(value);
+    setVisibleColumnIds(normalized);
+    try {
+      window.localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(normalized));
+    } catch {
+      // The selection still works for this session when storage is unavailable.
+    }
+  }, []);
+
+  const visibleColumnSet = useMemo(
+    () => new Set(visibleColumnIds),
+    [visibleColumnIds],
+  );
+  const visibleColumns = useMemo(
+    () => TRACK_COLUMNS.filter((column) => visibleColumnSet.has(column.id)),
+    [visibleColumnSet],
+  );
+  const sortableColumns = useMemo(
+    () => visibleColumns.filter((column) => column.getSortValue),
+    [visibleColumns],
+  );
 
   useEffect(() => {
     void (async () => {
@@ -637,37 +1371,40 @@ function PlaylistsView() {
     !visiblePlaylists.some((playlist) => playlist.id === selected.id),
   );
 
-  const loadItems = useCallback(async (playlist: Playlist) => {
+  const loadItems = useCallback(async (playlist: Pick<Playlist, "id">) => {
+    itemLoadController.current?.abort();
+    const controller = new AbortController();
+    itemLoadController.current = controller;
     setLoadingItems(true);
     setError("");
+    setItems([]);
+    setLoadedPlaylistId(null);
     try {
       const data = await getJson<{ items: Omit<PlaylistItem, "position">[] }>(
         `/api/playlists/${encodeURIComponent(playlist.id)}/items`,
+        { signal: controller.signal },
       );
+      if (controller.signal.aborted) return;
       setItems(data.items.map((item, position) => ({ ...item, position })));
+      setLoadedPlaylistId(playlist.id);
       setSortKey("position");
       setDescending(false);
     } catch (loadError) {
+      if (controller.signal.aborted) return;
       setError(loadError instanceof Error ? loadError.message : "Could not load this playlist.");
     } finally {
-      setLoadingItems(false);
+      if (itemLoadController.current === controller) {
+        itemLoadController.current = null;
+        setLoadingItems(false);
+      }
     }
   }, []);
 
   useEffect(() => {
-    if (selected) void loadItems(selected);
-  }, [loadItems, selected]);
+    if (selectedPlaylistId) void loadItems({ id: selectedPlaylistId });
+  }, [loadItems, selectedPlaylistId]);
 
-  const valueFor = useCallback((entry: PlaylistItem, key: SortKey) => {
-    const track = entry.item;
-    if (key === "name") return (track.name ?? "").toLowerCase();
-    if (key === "artist") return (track.artists?.[0]?.name ?? "").toLowerCase();
-    if (key === "album") return (track.album?.name ?? "").toLowerCase();
-    if (key === "duration") return track.duration_ms || 0;
-    if (key === "release") return track.album?.release_date || "";
-    if (key === "added") return entry.added_at || "";
-    return entry.position;
-  }, []);
+  useEffect(() => () => itemLoadController.current?.abort(), []);
 
   const visibleItems = useMemo(() => {
     const needle = query.toLowerCase();
@@ -676,22 +1413,57 @@ function PlaylistsView() {
         .toLowerCase()
         .includes(needle),
     );
+    const sortColumn = TRACK_COLUMNS.find((column) => column.id === sortKey);
     return [...filtered].sort((a, b) => {
-      const left = valueFor(a, sortKey);
-      const right = valueFor(b, sortKey);
-      const compared = typeof left === "number" && typeof right === "number"
-        ? left - right
-        : String(left).localeCompare(String(right));
+      const left = sortColumn?.getSortValue?.(a);
+      const right = sortColumn?.getSortValue?.(b);
+      const leftMissing = left === null || left === undefined || left === "";
+      const rightMissing = right === null || right === undefined || right === "";
+      if (leftMissing !== rightMissing) return leftMissing ? 1 : -1;
+
+      const compared =
+        typeof left === "number" && typeof right === "number"
+          ? left - right
+          : typeof left === "boolean" && typeof right === "boolean"
+            ? Number(left) - Number(right)
+            : String(left ?? "").localeCompare(String(right ?? ""));
+      if (compared === 0) return a.position - b.position;
       return descending ? -compared : compared;
     });
-  }, [descending, items, query, sortKey, valueFor]);
+  }, [descending, items, query, sortKey]);
 
-  const sortBy = (key: SortKey) => {
+  const sortBy = (key: ColumnId) => {
     if (sortKey === key) setDescending((current) => !current);
     else {
       setSortKey(key);
       setDescending(false);
     }
+  };
+
+  const toggleColumn = (column: TrackColumn) => {
+    if (column.required) return;
+    const isVisible = visibleColumnSet.has(column.id);
+    updateVisibleColumns(
+      isVisible
+        ? visibleColumnIds.filter((id) => id !== column.id)
+        : [...visibleColumnIds, column.id],
+    );
+    if (isVisible && sortKey === column.id) {
+      setSortKey("position");
+      setDescending(false);
+    }
+  };
+
+  const resetColumns = () => {
+    updateVisibleColumns(DEFAULT_COLUMN_IDS);
+    if (!DEFAULT_COLUMN_IDS.includes(sortKey)) {
+      setSortKey("position");
+      setDescending(false);
+    }
+  };
+
+  const showAllColumns = () => {
+    updateVisibleColumns(TRACK_COLUMNS.map((column) => column.id));
   };
 
   const shuffle = () => {
@@ -706,7 +1478,13 @@ function PlaylistsView() {
   };
 
   const persistOrder = async () => {
-    if (!selected || query) return;
+    if (
+      !selected ||
+      query ||
+      error ||
+      loadingItems ||
+      loadedPlaylistId !== selected.id
+    ) return;
     setSaving(true);
     setError("");
     try {
@@ -725,7 +1503,13 @@ function PlaylistsView() {
         originalIndex: position,
       }));
       setItems(committed);
-      setSelected({ ...selected, snapshot_id: result.snapshotId });
+      const updatedPlaylist = { ...selected, snapshot_id: result.snapshotId };
+      setSelected(updatedPlaylist);
+      setPlaylists((current) =>
+        current.map((playlist) =>
+          playlist.id === updatedPlaylist.id ? updatedPlaylist : playlist,
+        ),
+      );
       setSortKey("position");
       setDescending(false);
       setToast(
@@ -790,8 +1574,15 @@ function PlaylistsView() {
                       className={`playlist-row ${
                         selected?.id === playlist.id ? "selected" : ""
                       }`}
+                      disabled={saving}
                       key={playlist.id}
-                      onClick={() => setSelected(playlist)}
+                      onClick={() => {
+                        if (selected?.id === playlist.id) return;
+                        itemLoadController.current?.abort();
+                        setItems([]);
+                        setLoadedPlaylistId(null);
+                        setSelected(playlist);
+                      }}
                       type="button"
                     >
                       {coverUrl ? (
@@ -828,7 +1619,7 @@ function PlaylistsView() {
             <div className="playlist-panel-head">
               <div>
                 <h2>{selected?.name}</h2>
-                <p>{items.length} loaded items · sort by any column</p>
+                <p>{items.length} loaded items · configure and sort metadata</p>
                 {selectedOutsideFilter && (
                   <button
                     className="playlist-filter-reset"
@@ -864,7 +1655,11 @@ function PlaylistsView() {
                 )}
                 <button
                   className="secondary-button"
-                  disabled={loadingItems || saving}
+                  disabled={
+                    loadingItems ||
+                    saving ||
+                    loadedPlaylistId !== selected?.id
+                  }
                   onClick={shuffle}
                   type="button"
                 >
@@ -872,9 +1667,23 @@ function PlaylistsView() {
                 </button>
                 <button
                   className="primary-button"
-                  disabled={loadingItems || saving || Boolean(query)}
+                  disabled={
+                    loadingItems ||
+                    saving ||
+                    Boolean(query) ||
+                    Boolean(error) ||
+                    loadedPlaylistId !== selected?.id
+                  }
                   onClick={() => void persistOrder()}
-                  title={query ? "Clear search before saving a reordered playlist" : undefined}
+                  title={
+                    query
+                      ? "Clear search before saving a reordered playlist"
+                      : error
+                        ? "Refresh the playlist before saving"
+                        : loadedPlaylistId !== selected?.id
+                          ? "Wait for this playlist to finish loading"
+                          : undefined
+                  }
                   type="button"
                 >
                   {saving ? <LoaderCircle className="spinner" size={14} /> : <ArrowUpDown size={14} />}
@@ -892,16 +1701,61 @@ function PlaylistsView() {
                   value={query}
                 />
               </label>
-              {selected && (
-                <a
-                  className="secondary-button"
-                  href={selected.external_urls.spotify}
-                  rel="noreferrer"
-                  target="_blank"
-                >
-                  Open Spotify <ExternalLink size={13} />
-                </a>
-              )}
+              <div className="playlist-toolbar-actions">
+                <details className="column-config">
+                  <summary className="secondary-button">
+                    <Columns3 size={14} />
+                    Columns
+                    <span>{visibleColumns.length}/{TRACK_COLUMNS.length}</span>
+                  </summary>
+                  <div className="column-config-panel">
+                    <div className="column-config-header">
+                      <div>
+                        <h3>Song metadata</h3>
+                        <p>Choose once; this device remembers it.</p>
+                      </div>
+                      <div className="column-config-buttons">
+                        <button onClick={showAllColumns} type="button">Show all</button>
+                        <button onClick={resetColumns} type="button">Defaults</button>
+                      </div>
+                    </div>
+                    {COLUMN_GROUPS.map((group) => (
+                      <fieldset className="column-config-group" key={group}>
+                        <legend className="column-config-group-title">{group}</legend>
+                        <div className="column-config-grid">
+                          {TRACK_COLUMNS
+                            .filter((column) => column.group === group)
+                            .map((column) => (
+                              <label className="column-config-option" key={column.id}>
+                                <input
+                                  checked={visibleColumnSet.has(column.id)}
+                                  disabled={column.required}
+                                  onChange={() => toggleColumn(column)}
+                                  type="checkbox"
+                                />
+                                <span>{column.sortLabel ?? column.label}</span>
+                              </label>
+                            ))}
+                        </div>
+                      </fieldset>
+                    ))}
+                    <p>
+                      Spotify links are built into track, artist, album, and contributor
+                      values. Missing metadata stays visible as an em dash.
+                    </p>
+                  </div>
+                </details>
+                {selected && (
+                  <a
+                    className="secondary-button"
+                    href={selected.external_urls.spotify}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    Open Spotify <ExternalLink size={13} />
+                  </a>
+                )}
+              </div>
             </div>
             {loadingItems ? (
               <div className="loading-state" style={{ border: 0 }}>
@@ -923,18 +1777,16 @@ function PlaylistsView() {
                   <span>Sort tracks</span>
                   <select
                     onChange={(event) => {
-                      setSortKey(event.target.value as SortKey);
+                      setSortKey(event.target.value as ColumnId);
                       setDescending(false);
                     }}
                     value={sortKey}
                   >
-                    <option value="position">Playlist position</option>
-                    <option value="name">Track name</option>
-                    <option value="artist">Artist</option>
-                    <option value="album">Album</option>
-                    <option value="duration">Duration</option>
-                    <option value="release">Release date</option>
-                    <option value="added">Date added</option>
+                    {sortableColumns.map((column) => (
+                      <option key={column.id} value={column.id}>
+                        {column.sortLabel ?? column.label}
+                      </option>
+                    ))}
                   </select>
                 </label>
                 <button
@@ -951,17 +1803,29 @@ function PlaylistsView() {
                 <table className="track-table">
                   <thead>
                     <tr>
-                      {([
-                        ["position", "#"],
-                        ["name", "Track"],
-                        ["artist", "Artist"],
-                        ["album", "Album"],
-                        ["duration", "Time"],
-                        ["release", "Released"],
-                        ["added", "Added"],
-                      ] as Array<[SortKey, string]>).map(([key, label]) => (
-                        <th key={key} onClick={() => sortBy(key)} scope="col">
-                          {label}{sortKey === key ? (descending ? " ↓" : " ↑") : ""}
+                      {visibleColumns.map((column) => (
+                        <th
+                          aria-sort={
+                            sortKey === column.id
+                              ? descending
+                                ? "descending"
+                                : "ascending"
+                              : undefined
+                          }
+                          data-column={column.id}
+                          key={column.id}
+                          scope="col"
+                        >
+                          {column.getSortValue ? (
+                            <button
+                              className="table-sort-button"
+                              onClick={() => sortBy(column.id)}
+                              type="button"
+                            >
+                              {column.label}
+                              {sortKey === column.id ? (descending ? " ↓" : " ↑") : ""}
+                            </button>
+                          ) : column.label}
                         </th>
                       ))}
                       <th className="listen-column" scope="col">Listen</th>
@@ -971,28 +1835,22 @@ function PlaylistsView() {
                     {visibleItems.map((entry, index) => {
                       const canPlay =
                         !entry.is_local &&
+                        entry.item.is_local !== true &&
+                        entry.item.is_playable !== false &&
                         /^spotify:track:[a-zA-Z0-9]{22}$/.test(entry.item.uri);
                       const playbackKey = `track:${entry.key}`;
                       return (
                       <tr key={entry.key}>
-                        <td data-label="Position">{index + 1}</td>
-                        <td className="track-title" data-label="Track">
-                          {entry.item.external_urls?.spotify ? (
-                            <a
-                              href={entry.item.external_urls.spotify}
-                              rel="noreferrer"
-                              target="_blank"
-                            >
-                              {entry.item.name}
-                            </a>
-                          ) : entry.item.name}
-                          {entry.item.explicit && <span className="explicit">E</span>}
-                        </td>
-                        <td data-label="Artist">{entry.item.artists?.map((artist) => artist.name).join(", ") || "—"}</td>
-                        <td data-label="Album">{entry.item.album?.name || "—"}</td>
-                        <td data-label="Duration">{entry.item.duration_ms ? formatDuration(entry.item.duration_ms) : "—"}</td>
-                        <td data-label="Released">{formatDate(entry.item.album?.release_date)}</td>
-                        <td data-label="Added">{formatDate(entry.added_at)}</td>
+                        {visibleColumns.map((column) => (
+                          <td
+                            className={column.className}
+                            data-column={column.id}
+                            data-label={column.sortLabel ?? column.label}
+                            key={column.id}
+                          >
+                            {column.render(entry, index)}
+                          </td>
+                        ))}
                         <td className="track-actions" data-label="Listen">
                           <button
                             aria-label={`Play ${entry.item.name} in this browser`}
@@ -1007,7 +1865,9 @@ function PlaylistsView() {
                             title={
                               canPlay
                                 ? "Play in browser"
-                                : "Local and unavailable tracks cannot play in the browser"
+                                : entry.item.is_playable === false
+                                  ? "Spotify reports this track as unavailable for playback"
+                                  : "Local and unavailable tracks cannot play in the browser"
                             }
                             type="button"
                           >
@@ -1038,8 +1898,8 @@ function PlaylistsView() {
         </div>
       )}
       <p className="legal-note">
-        BPM, key and audio-analysis fields are unavailable to Spotify apps created after
-        November 2024. Track metadata links back to Spotify.
+        Popularity, BPM, key and audio-analysis fields are unavailable to this Spotify
+        app. Track metadata links back to Spotify.
       </p>
       {toast && <div className="toast"><Check size={15} />{toast}</div>}
     </main>

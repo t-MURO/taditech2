@@ -1,14 +1,16 @@
 import { apiError, spotifyJson } from "@/lib/spotify";
 import {
   normalizeSpotifyTrack,
+  normalizeSpotifyUserReference,
   type NormalizedSpotifyTrack,
+  type NormalizedSpotifyUserReference,
 } from "@/lib/spotify-data";
 
 export const dynamic = "force-dynamic";
 
 type SpotifyItem = {
   added_at?: unknown;
-  added_by?: { id?: unknown } | null;
+  added_by?: unknown;
   is_local?: unknown;
   item?: unknown;
   track?: unknown;
@@ -17,7 +19,7 @@ type ItemPage = { items?: Array<SpotifyItem | null> | null; next?: unknown };
 
 type NormalizedPlaylistItem = {
   added_at: string | null;
-  added_by?: { id: string } | null;
+  added_by?: NormalizedSpotifyUserReference | null;
   is_local: boolean;
   item: NormalizedSpotifyTrack;
   originalIndex: number;
@@ -45,14 +47,14 @@ export async function GET(
       for (const rawEntry of entries) {
         const entry = rawEntry && typeof rawEntry === "object" ? rawEntry : {};
         const item = normalizeSpotifyTrack(entry.item ?? entry.track, index);
-        const addedById = nonEmptyString(entry.added_by?.id);
+        const addedBy = normalizeSpotifyUserReference(entry.added_by);
         const addedAt = nonEmptyString(entry.added_at) ?? null;
         output.push({
           added_at: addedAt,
           ...(entry.added_by === null
             ? { added_by: null }
-            : addedById
-              ? { added_by: { id: addedById } }
+            : addedBy
+              ? { added_by: addedBy }
               : {}),
           is_local: entry.is_local === true,
           item,
