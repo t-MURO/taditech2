@@ -61,8 +61,9 @@ Spotify does not provide a tailored endpoint for new releases from followed
 artists. Tadi Tech only starts a scan after an explicit click, advances through
 the followed-artist list in small sequential batches, deduplicates releases,
 and saves each completed batch in memory so a paused or interrupted scan can
-continue without starting over. Pausing aborts the active batch and prevents
-new Spotify requests until the user continues.
+continue without starting over. Pausing cancels the browser's active batch and
+prevents the next batch from starting until the user continues; a Spotify
+request that was already in flight may still finish.
 For ordinary rate limits it honors Spotify's complete `Retry-After` window and
 then resumes. Development Mode quota exhaustion is reported separately because
 Spotify does not provide a retry time for it.

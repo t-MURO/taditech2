@@ -441,7 +441,7 @@ function ReleasesView() {
           </strong>
           <span>
             {paused
-              ? "The active batch was stopped. No more Spotify requests are sent until you continue."
+              ? "No new batch starts until you continue. A Spotify request already in flight may finish."
               : hasProgress
                 ? `Continue from artist ${scannedArtists + 1}; completed batches will not be fetched again.`
                 : "No release requests are sent until you start the scan."}
