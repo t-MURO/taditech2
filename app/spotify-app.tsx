@@ -13,12 +13,14 @@ import {
   LoaderCircle,
   LogOut,
   Music2,
+  Play,
   RefreshCw,
   Search,
   Shuffle,
   Sparkles,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { PlaybackProvider, usePlayback } from "./spotify-player";
 
 type User = {
   id: string;
@@ -175,6 +177,7 @@ function Landing({ authError }: { authError: string }) {
 }
 
 function ReleasesView() {
+  const playback = usePlayback();
   const [releases, setReleases] = useState<Release[]>(() => releaseMemoryCache?.releases || []);
   const [artistCount, setArtistCount] = useState(() => releaseMemoryCache?.artistCount || 0);
   const [loading, setLoading] = useState(() => !releaseMemoryCache);
@@ -278,26 +281,62 @@ function ReleasesView() {
         <div className="empty"><Music2 size={28} /><span>No releases match this search.</span></div>
       ) : (
         <div className="release-grid">
-          {visible.map((release) => (
-            <a
+          {visible.map((release) => {
+            const playbackKey = `album:${release.id}`;
+            return (
+            <article
               className="release-card"
-              href={release.external_urls.spotify}
               key={release.id}
-              rel="noreferrer"
-              target="_blank"
             >
               <div className="cover-wrap">
                 {release.images[0] && <img alt="" src={release.images[0].url} />}
-                <span className="release-badge">{release.album_type}</span>
               </div>
-              <h3>{release.name}</h3>
+              <div className="release-actions">
+                <span className="release-badge">{release.album_type}</span>
+                <div className="release-action-buttons">
+                  <button
+                    aria-label={`Play ${release.name} in this browser`}
+                    disabled={!playback.deviceReady || Boolean(playback.pendingKey)}
+                    onClick={() =>
+                      void playback.play(
+                        { contextUri: `spotify:album:${release.id}` },
+                        playbackKey,
+                      )
+                    }
+                    title={
+                      playback.authorized
+                        ? "Play in browser"
+                        : "Reconnect Spotify to enable browser playback"
+                    }
+                    type="button"
+                  >
+                    {playback.pendingKey === playbackKey
+                      ? <LoaderCircle className="spinner" size={16} />
+                      : <Play size={16} fill="currentColor" />}
+                  </button>
+                  <a
+                    aria-label={`Open ${release.name} in Spotify`}
+                    href={release.external_urls.spotify}
+                    rel="noreferrer"
+                    target="_blank"
+                    title="Open in Spotify"
+                  >
+                    <ExternalLink size={15} />
+                  </a>
+                </div>
+              </div>
+              <h3>
+                <a href={release.external_urls.spotify} rel="noreferrer" target="_blank">
+                  {release.name}
+                </a>
+              </h3>
               <p>{release.artists.map((artist) => artist.name).join(", ")}</p>
               <div className="release-meta">
                 <span>{formatDate(release.release_date)}</span>
                 <span>{release.total_tracks} track{release.total_tracks === 1 ? "" : "s"}</span>
               </div>
-            </a>
-          ))}
+            </article>
+          )})}
         </div>
       )}
       <p className="legal-note">
@@ -308,6 +347,7 @@ function ReleasesView() {
 }
 
 function PlaylistsView() {
+  const playback = usePlayback();
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [selected, setSelected] = useState<Playlist | null>(null);
   const [items, setItems] = useState<PlaylistItem[]>([]);
@@ -491,6 +531,28 @@ function PlaylistsView() {
                 <p>{items.length} loaded items · click any column to sort</p>
               </div>
               <div className="panel-actions">
+                {selected && (
+                  <button
+                    className="secondary-button"
+                    disabled={
+                      loadingItems ||
+                      Boolean(playback.pendingKey) ||
+                      !playback.deviceReady
+                    }
+                    onClick={() =>
+                      void playback.play(
+                        { contextUri: `spotify:playlist:${selected.id}` },
+                        `playlist:${selected.id}`,
+                      )
+                    }
+                    type="button"
+                  >
+                    {playback.pendingKey === `playlist:${selected.id}`
+                      ? <LoaderCircle className="spinner" size={14} />
+                      : <Play size={14} fill="currentColor" />}
+                    Play
+                  </button>
+                )}
                 <button
                   className="secondary-button"
                   disabled={loadingItems || saving}
@@ -563,10 +625,16 @@ function PlaylistsView() {
                           {label}{sortKey === key ? (descending ? " ↓" : " ↑") : ""}
                         </th>
                       ))}
+                      <th className="listen-column" scope="col">Listen</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {visibleItems.map((entry, index) => (
+                    {visibleItems.map((entry, index) => {
+                      const canPlay =
+                        !entry.is_local &&
+                        /^spotify:track:[a-zA-Z0-9]{22}$/.test(entry.item.uri);
+                      const playbackKey = `track:${entry.key}`;
+                      return (
                       <tr key={entry.key}>
                         <td>{index + 1}</td>
                         <td className="track-title">
@@ -586,8 +654,42 @@ function PlaylistsView() {
                         <td>{entry.item.duration_ms ? formatDuration(entry.item.duration_ms) : "—"}</td>
                         <td>{formatDate(entry.item.album?.release_date)}</td>
                         <td>{formatDate(entry.added_at)}</td>
+                        <td className="track-actions">
+                          <button
+                            aria-label={`Play ${entry.item.name} in this browser`}
+                            disabled={
+                              !canPlay ||
+                              !playback.deviceReady ||
+                              Boolean(playback.pendingKey)
+                            }
+                            onClick={() =>
+                              void playback.play({ uris: [entry.item.uri] }, playbackKey)
+                            }
+                            title={
+                              canPlay
+                                ? "Play in browser"
+                                : "Local and unavailable tracks cannot play in the browser"
+                            }
+                            type="button"
+                          >
+                            {playback.pendingKey === playbackKey
+                              ? <LoaderCircle className="spinner" size={13} />
+                              : <Play size={13} fill="currentColor" />}
+                          </button>
+                          {entry.item.external_urls?.spotify && (
+                            <a
+                              aria-label={`Open ${entry.item.name} in Spotify`}
+                              href={entry.item.external_urls.spotify}
+                              rel="noreferrer"
+                              target="_blank"
+                              title="Open in Spotify"
+                            >
+                              <ExternalLink size={13} />
+                            </a>
+                          )}
+                        </td>
                       </tr>
-                    ))}
+                    )})}
                   </tbody>
                 </table>
               </div>
@@ -609,13 +711,15 @@ export function SpotifyApp() {
   const [checking, setChecking] = useState(true);
   const [view, setView] = useState<"releases" | "playlists">("releases");
   const [authError, setAuthError] = useState("");
+  const [playbackAuthorized, setPlaybackAuthorized] = useState(false);
 
   useEffect(() => {
     setAuthError(new URLSearchParams(window.location.search).get("auth_error") || "");
     void (async () => {
       try {
-        const data = await getJson<{ user: User }>("/api/session");
+        const data = await getJson<{ user: User; playbackAuthorized: boolean }>("/api/session");
         setUser(data.user);
+        setPlaybackAuthorized(data.playbackAuthorized);
       } catch {
         setUser(null);
       } finally {
@@ -632,8 +736,8 @@ export function SpotifyApp() {
     );
   }
 
-  return (
-    <div className="app-shell">
+  const shell = (
+    <div className={`app-shell ${user ? "with-player" : ""}`}>
       <header className="topbar">
         <button
           className="brand"
@@ -692,4 +796,10 @@ export function SpotifyApp() {
           : <PlaylistsView />}
     </div>
   );
+
+  return user ? (
+    <PlaybackProvider authorized={playbackAuthorized}>
+      {shell}
+    </PlaybackProvider>
+  ) : shell;
 }

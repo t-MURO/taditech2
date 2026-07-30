@@ -3,6 +3,7 @@
 A modern Spotify companion for:
 
 - finding the newest albums, EPs, and singles from every followed artist
+- opening content in Spotify or playing it directly in the browser
 - viewing playlists you own or collaborate on
 - sorting full playlist contents by track metadata
 - persisting the visible order back to Spotify
@@ -21,6 +22,20 @@ and a Spotify client secret are not required.
 
 For a deployed site, add its HTTPS origin followed by
 `/api/auth/callback` as an additional Redirect URI.
+
+## Browser playback
+
+The persistent browser player uses Spotify's Web Playback SDK. It can start an
+album, a full playlist, or an individual playlist track and includes
+play/pause, previous, and next controls.
+
+- Spotify Premium is required for browser playback.
+- Existing users must reconnect once after playback is added so Spotify can
+  grant the `streaming` and playback-control scopes.
+- Access tokens remain in memory only and are refreshed through a private,
+  same-origin endpoint; they are never stored in browser storage.
+- Local or unavailable playlist tracks cannot be streamed through the Web API,
+  but their normal Spotify link remains available when Spotify supplies one.
 
 ## Development
 

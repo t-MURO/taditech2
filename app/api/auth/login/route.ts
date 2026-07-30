@@ -51,6 +51,9 @@ export async function GET(request: Request) {
     state,
     code_challenge_method: "S256",
     code_challenge: challenge,
+    ...(requestUrl.searchParams.get("reauthorize") === "1"
+      ? { show_dialog: "true" }
+      : {}),
   }).toString();
   return NextResponse.redirect(authorize);
 }

@@ -5,22 +5,39 @@ const TOKEN_URL = "https://accounts.spotify.com/api/token";
 
 export const SPOTIFY_SCOPES = [
   "user-read-private",
+  "user-read-email",
   "user-follow-read",
+  "streaming",
+  "user-modify-playback-state",
   "playlist-read-private",
   "playlist-read-collaborative",
   "playlist-modify-public",
   "playlist-modify-private",
 ].join(" ");
 
+export const PLAYBACK_SCOPES = [
+  "streaming",
+  "user-read-email",
+  "user-read-private",
+  "user-modify-playback-state",
+];
+
 export class SpotifyError extends Error {
   status: number;
   retryAfter?: number;
+  code?: string;
 
-  constructor(message: string, status: number, retryAfter?: number) {
+  constructor(
+    message: string,
+    status: number,
+    retryAfter?: number,
+    code?: string,
+  ) {
     super(message);
     this.name = "SpotifyError";
     this.status = status;
     this.retryAfter = retryAfter;
+    this.code = code;
   }
 }
 
@@ -38,6 +55,7 @@ export async function saveTokens(tokens: {
   access_token: string;
   expires_in: number;
   refresh_token?: string;
+  scope?: string;
 }) {
   const jar = await cookies();
   jar.set("spotify_access", tokens.access_token, cookieOptions(tokens.expires_in));
@@ -49,13 +67,27 @@ export async function saveTokens(tokens: {
   if (tokens.refresh_token) {
     jar.set("spotify_refresh", tokens.refresh_token, cookieOptions(60 * 60 * 24 * 180));
   }
+  if (tokens.scope) {
+    jar.set("spotify_scopes", tokens.scope, cookieOptions(60 * 60 * 24 * 180));
+  }
 }
 
 export async function clearTokens() {
   const jar = await cookies();
-  for (const name of ["spotify_access", "spotify_refresh", "spotify_expires"]) {
+  for (const name of [
+    "spotify_access",
+    "spotify_refresh",
+    "spotify_expires",
+    "spotify_scopes",
+  ]) {
     jar.delete(name);
   }
+}
+
+export async function hasPlaybackScopes() {
+  const jar = await cookies();
+  const granted = new Set((jar.get("spotify_scopes")?.value || "").split(" "));
+  return PLAYBACK_SCOPES.every((scope) => granted.has(scope));
 }
 
 async function refreshAccessToken(refreshToken: string) {
@@ -74,6 +106,7 @@ async function refreshAccessToken(refreshToken: string) {
     access_token?: string;
     expires_in?: number;
     refresh_token?: string;
+    scope?: string;
     error?: string;
   };
   if (!response.ok || !data.access_token || !data.expires_in) {
@@ -89,6 +122,7 @@ async function refreshAccessToken(refreshToken: string) {
     access_token: data.access_token,
     expires_in: data.expires_in,
     refresh_token: data.refresh_token,
+    scope: data.scope,
   });
   return data.access_token;
 }
@@ -170,7 +204,8 @@ export function apiError(error: unknown) {
   return Response.json(
     {
       error: known ? error.message : "Something went wrong while talking to Spotify.",
-      reconnect: known && error.status === 401,
+      reconnect: known && (error.status === 401 || error.code === "reauthorize"),
+      code: known ? error.code : undefined,
       retryAfter: known ? error.retryAfter : undefined,
     },
     { status: known ? error.status : 500 },

@@ -1,4 +1,4 @@
-import { apiError, spotifyJson } from "@/lib/spotify";
+import { apiError, hasPlaybackScopes, spotifyJson } from "@/lib/spotify";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +12,11 @@ type Profile = {
 
 export async function GET() {
   try {
-    return Response.json({ user: await spotifyJson<Profile>("/me") });
+    const [user, playbackAuthorized] = await Promise.all([
+      spotifyJson<Profile>("/me"),
+      hasPlaybackScopes(),
+    ]);
+    return Response.json({ user, playbackAuthorized });
   } catch (error) {
     return apiError(error);
   }

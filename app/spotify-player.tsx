@@ -1,0 +1,705 @@
+"use client";
+/* eslint-disable react-hooks/set-state-in-effect, @next/next/no-img-element */
+
+import {
+  ExternalLink,
+  LoaderCircle,
+  MonitorSpeaker,
+  Pause,
+  Play,
+  SkipBack,
+  SkipForward,
+} from "lucide-react";
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+
+type SpotifyArtist = { name: string; uri: string };
+type SpotifyImage = { url: string; height?: number; width?: number };
+type SpotifyTrack = {
+  id: string;
+  uri: string;
+  type?: string;
+  name: string;
+  duration_ms: number;
+  artists: SpotifyArtist[];
+  album: { name: string; uri: string; images: SpotifyImage[] };
+};
+type SpotifyState = {
+  paused: boolean;
+  position: number;
+  duration: number;
+  track_window: { current_track: SpotifyTrack };
+};
+type SpotifyPlayer = {
+  addListener(event: string, callback: (payload: never) => void): boolean;
+  activateElement(): Promise<void>;
+  connect(): Promise<boolean>;
+  disconnect(): void;
+  nextTrack(): Promise<void>;
+  previousTrack(): Promise<void>;
+  togglePlay(): Promise<void>;
+};
+type SpotifyNamespace = {
+  Player: new (options: {
+    name: string;
+    getOAuthToken: (callback: (token: string) => void) => void;
+    volume?: number;
+    enableMediaSession?: boolean;
+  }) => SpotifyPlayer;
+};
+
+declare global {
+  interface Window {
+    Spotify?: SpotifyNamespace;
+    onSpotifyWebPlaybackSDKReady?: () => void;
+  }
+}
+
+type PlayTarget = {
+  contextUri?: string;
+  offsetUri?: string;
+  uris?: string[];
+};
+type PlaybackContextValue = {
+  authorized: boolean;
+  deviceReady: boolean;
+  pendingKey: string;
+  play: (target: PlayTarget, key: string) => Promise<void>;
+};
+
+const PlaybackContext = createContext<PlaybackContextValue | null>(null);
+let sdkPromise: Promise<SpotifyNamespace> | null = null;
+let tokenPromise: Promise<string> | null = null;
+
+class PlaybackClientError extends Error {
+  reconnect: boolean;
+
+  constructor(message: string, reconnect = false) {
+    super(message);
+    this.name = "PlaybackClientError";
+    this.reconnect = reconnect;
+  }
+}
+
+export function usePlayback() {
+  const value = useContext(PlaybackContext);
+  if (!value) throw new Error("usePlayback must be used inside PlaybackProvider.");
+  return value;
+}
+
+export function PlaybackProvider({
+  authorized,
+  children,
+}: {
+  authorized: boolean;
+  children: ReactNode;
+}) {
+  const playerRef = useRef<SpotifyPlayer | null>(null);
+  const [deviceId, setDeviceId] = useState("");
+  const deviceIdRef = useRef("");
+  const [connecting, setConnecting] = useState(authorized);
+  const [reconnectRequired, setReconnectRequired] = useState(!authorized);
+  const [retryAvailable, setRetryAvailable] = useState(false);
+  const [retryNonce, setRetryNonce] = useState(0);
+  const [state, setState] = useState<SpotifyState | null>(null);
+  const [observedAt, setObservedAt] = useState(0);
+  const [clock, setClock] = useState(0);
+  const [error, setError] = useState("");
+  const [pendingKey, setPendingKey] = useState("");
+  const pendingCommandRef = useRef("");
+  const commandAcceptedRef = useRef(false);
+  const commandAbortRef = useRef<AbortController | null>(null);
+  const pendingTimeoutRef = useRef<number | null>(null);
+  const transientTokenFailureRef = useRef(false);
+
+  const setActiveDeviceId = useCallback((nextDeviceId: string) => {
+    deviceIdRef.current = nextDeviceId;
+    setDeviceId(nextDeviceId);
+  }, []);
+
+  const clearPending = useCallback(() => {
+    commandAbortRef.current?.abort();
+    commandAbortRef.current = null;
+    if (pendingTimeoutRef.current !== null) {
+      window.clearTimeout(pendingTimeoutRef.current);
+      pendingTimeoutRef.current = null;
+    }
+    pendingCommandRef.current = "";
+    commandAcceptedRef.current = false;
+    setPendingKey("");
+  }, []);
+
+  useEffect(() => {
+    if (!authorized) {
+      setConnecting(false);
+      setReconnectRequired(true);
+      setActiveDeviceId("");
+      setState(null);
+      setRetryAvailable(false);
+      clearPending();
+      return;
+    }
+
+    let cancelled = false;
+    let localPlayer: SpotifyPlayer | null = null;
+    setConnecting(true);
+    setReconnectRequired(false);
+    setRetryAvailable(false);
+    transientTokenFailureRef.current = false;
+    setError("");
+
+    void (async () => {
+      try {
+        const Spotify = await loadSpotifySdk();
+        if (cancelled) return;
+        localPlayer = new Spotify.Player({
+          name: "Tadi Tech Browser Player",
+          volume: 0.72,
+          enableMediaSession: true,
+          getOAuthToken: (callback) => {
+            void fetchPlaybackToken()
+              .then((token) => {
+                if (cancelled) return;
+                transientTokenFailureRef.current = false;
+                callback(token);
+              })
+              .catch((tokenError) => {
+                if (cancelled) return;
+                const reconnect =
+                  tokenError instanceof PlaybackClientError && tokenError.reconnect;
+                transientTokenFailureRef.current = !reconnect;
+                callback("");
+                setActiveDeviceId("");
+                setState(null);
+                setConnecting(false);
+                setReconnectRequired(reconnect);
+                setRetryAvailable(!reconnect);
+                clearPending();
+                setError(messageFrom(tokenError));
+              });
+          },
+        });
+        playerRef.current = localPlayer;
+
+        localPlayer.addListener("ready", ((payload: { device_id: string }) => {
+          if (cancelled) return;
+          setActiveDeviceId(payload.device_id);
+          setConnecting(false);
+          setReconnectRequired(false);
+          setRetryAvailable(false);
+          transientTokenFailureRef.current = false;
+          setError("");
+        }) as (payload: never) => void);
+        localPlayer.addListener("not_ready", ((payload: { device_id: string }) => {
+          if (cancelled || deviceIdRef.current !== payload.device_id) return;
+          setActiveDeviceId("");
+          setState(null);
+          setObservedAt(0);
+          setClock(0);
+          setConnecting(true);
+          setRetryAvailable(true);
+          clearPending();
+          setError("The browser player went offline. Waiting for Spotify to reconnect.");
+        }) as (payload: never) => void);
+        localPlayer.addListener("player_state_changed", ((nextState: SpotifyState | null) => {
+          if (cancelled) return;
+          if (!nextState) {
+            setState(null);
+            setObservedAt(0);
+            setClock(0);
+            clearPending();
+            return;
+          }
+          setState(nextState);
+          const now = Date.now();
+          setObservedAt(now);
+          setClock(now);
+          if (commandAcceptedRef.current) clearPending();
+        }) as (payload: never) => void);
+        localPlayer.addListener("initialization_error", ((payload: { message: string }) => {
+          if (cancelled) return;
+          setActiveDeviceId("");
+          setState(null);
+          setConnecting(false);
+          setRetryAvailable(true);
+          clearPending();
+          setError(
+            payload.message ||
+              "This browser could not initialize Spotify’s protected audio player.",
+          );
+        }) as (payload: never) => void);
+        localPlayer.addListener("authentication_error", (() => {
+          if (cancelled) return;
+          const transientFailure = transientTokenFailureRef.current;
+          setActiveDeviceId("");
+          setState(null);
+          setConnecting(false);
+          setReconnectRequired(!transientFailure);
+          setRetryAvailable(transientFailure);
+          clearPending();
+          setError(
+            transientFailure
+              ? "Spotify playback authorization is temporarily unavailable. Try the player again."
+              : "Reconnect Spotify to grant browser playback permission.",
+          );
+        }) as (payload: never) => void);
+        localPlayer.addListener("account_error", (() => {
+          if (cancelled) return;
+          setActiveDeviceId("");
+          setState(null);
+          setConnecting(false);
+          setRetryAvailable(true);
+          clearPending();
+          setError("Browser playback requires an active Spotify Premium account.");
+        }) as (payload: never) => void);
+        localPlayer.addListener("playback_error", ((payload: { message: string }) => {
+          if (cancelled) return;
+          clearPending();
+          setError(payload.message || "Spotify could not play this item.");
+        }) as (payload: never) => void);
+        localPlayer.addListener("autoplay_failed", (() => {
+          if (cancelled) return;
+          clearPending();
+          setError("Your browser blocked autoplay. Tap play once more to start listening.");
+        }) as (payload: never) => void);
+
+        const connected = await localPlayer.connect();
+        if (!connected && !cancelled) {
+          setActiveDeviceId("");
+          setConnecting(false);
+          setRetryAvailable(true);
+          setError("Spotify could not connect the browser player.");
+        }
+      } catch (setupError) {
+        if (cancelled) return;
+        setActiveDeviceId("");
+        setConnecting(false);
+        setRetryAvailable(true);
+        setError(messageFrom(setupError));
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      clearPending();
+      localPlayer?.disconnect();
+      if (playerRef.current === localPlayer) playerRef.current = null;
+    };
+  }, [authorized, clearPending, retryNonce, setActiveDeviceId]);
+
+  useEffect(() => {
+    if (!state || state.paused) return;
+    const timer = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [state]);
+
+  const play = useCallback(
+    async (target: PlayTarget, key: string) => {
+      const player = playerRef.current;
+      if (!authorized || reconnectRequired) {
+        setReconnectRequired(true);
+        setError("Reconnect Spotify to enable browser playback.");
+        return;
+      }
+      if (!player || !deviceId) {
+        setError("The browser player is still connecting. Try again in a moment.");
+        return;
+      }
+      if (pendingCommandRef.current) return;
+
+      const commandController = new AbortController();
+      commandAbortRef.current = commandController;
+      const commandTimeout = window.setTimeout(
+        () => commandController.abort(),
+        15_000,
+      );
+      pendingCommandRef.current = key;
+      commandAcceptedRef.current = false;
+      setPendingKey(key);
+      setError("");
+      try {
+        await abortable(player.activateElement(), commandController.signal);
+        const response = await fetch("/api/playback/play", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deviceId, ...target }),
+          signal: commandController.signal,
+        });
+        if (!response.ok) {
+          throw await errorFromResponse(
+            response,
+            "Spotify could not start playback.",
+          );
+        }
+        commandAcceptedRef.current = true;
+        if (pendingCommandRef.current === key) {
+          pendingTimeoutRef.current = window.setTimeout(() => {
+            if (pendingCommandRef.current === key) clearPending();
+          }, 4_000);
+        }
+      } catch (playError) {
+        clearPending();
+        if (playError instanceof PlaybackClientError && playError.reconnect) {
+          setActiveDeviceId("");
+          setState(null);
+          setConnecting(false);
+          setReconnectRequired(true);
+          setRetryAvailable(false);
+        }
+        setError(
+          isAbortError(playError)
+            ? "Spotify took too long to respond. Try playing the item again."
+            : messageFrom(playError),
+        );
+      } finally {
+        window.clearTimeout(commandTimeout);
+        if (commandAbortRef.current === commandController) {
+          commandAbortRef.current = null;
+        }
+      }
+    },
+    [authorized, clearPending, deviceId, reconnectRequired, setActiveDeviceId],
+  );
+
+  const deviceReady =
+    authorized && !reconnectRequired && !connecting && Boolean(deviceId);
+  const value = useMemo<PlaybackContextValue>(
+    () => ({
+      authorized: authorized && !reconnectRequired,
+      deviceReady,
+      pendingKey,
+      play,
+    }),
+    [authorized, deviceReady, pendingKey, play, reconnectRequired],
+  );
+
+  const currentTrack = state?.track_window.current_track;
+  const currentTrackUrl = currentTrack ? spotifyWebUrl(currentTrack.uri) : "";
+  const elapsed = state
+    ? Math.min(
+        state.duration,
+        state.position + (state.paused ? 0 : Math.max(0, clock - observedAt)),
+      )
+    : 0;
+
+  const runControl = async (control: "previous" | "toggle" | "next") => {
+    const player = playerRef.current;
+    if (!player || !deviceReady || pendingCommandRef.current) return;
+    const commandKey = `control:${control}`;
+    const commandController = new AbortController();
+    commandAbortRef.current = commandController;
+    const commandTimeout = window.setTimeout(
+      () => commandController.abort(),
+      10_000,
+    );
+    pendingCommandRef.current = commandKey;
+    commandAcceptedRef.current = false;
+    setPendingKey(commandKey);
+    setError("");
+    try {
+      await abortable(player.activateElement(), commandController.signal);
+      const command =
+        control === "previous"
+          ? player.previousTrack()
+          : control === "next"
+            ? player.nextTrack()
+            : player.togglePlay();
+      await abortable(command, commandController.signal);
+    } catch (controlError) {
+      setError(
+        isAbortError(controlError)
+          ? "Spotify took too long to respond. Try that control again."
+          : messageFrom(controlError),
+      );
+    } finally {
+      window.clearTimeout(commandTimeout);
+      if (pendingCommandRef.current === commandKey) {
+        clearPending();
+      }
+      if (commandAbortRef.current === commandController) {
+        commandAbortRef.current = null;
+      }
+    }
+  };
+
+  return (
+    <PlaybackContext.Provider value={value}>
+      {children}
+      <aside className="browser-player" aria-label="Spotify browser player">
+        <div className="player-track">
+          {currentTrack?.album.images[0] ? (
+            <img alt="" src={currentTrack.album.images[0].url} />
+          ) : (
+            <div className="player-art-placeholder"><MonitorSpeaker size={20} /></div>
+          )}
+          <div className="player-copy" aria-live="polite">
+            <strong>
+              {currentTrack?.name ||
+                (reconnectRequired
+                  ? "Enable browser playback"
+                  : connecting
+                    ? "Preparing your browser player"
+                    : deviceReady
+                      ? "Browser player ready"
+                      : "Browser player unavailable")}
+            </strong>
+            <span aria-live={error ? "assertive" : "polite"} role={error ? "alert" : "status"}>
+              {currentTrack
+                ? error || currentTrack.artists.map((artist) => artist.name).join(", ")
+                : error || "Choose Play on any release or playlist track."}
+            </span>
+          </div>
+        </div>
+
+        {reconnectRequired ? (
+          <a className="player-enable" href="/api/auth/login?reauthorize=1">
+            Reconnect Spotify
+          </a>
+        ) : retryAvailable && !deviceReady ? (
+          <button
+            className="player-enable"
+            onClick={() => setRetryNonce((current) => current + 1)}
+            type="button"
+          >
+            Retry player
+          </button>
+        ) : (
+          <div className="player-controls">
+            <button
+              aria-label="Previous track"
+              disabled={!deviceReady || !currentTrack || Boolean(pendingKey)}
+              onClick={() => void runControl("previous")}
+              type="button"
+            >
+              <SkipBack size={16} fill="currentColor" />
+            </button>
+            <button
+              aria-label={state?.paused ? "Play" : "Pause"}
+              className="player-toggle"
+              disabled={!deviceReady || !currentTrack || Boolean(pendingKey)}
+              onClick={() => void runControl("toggle")}
+              type="button"
+            >
+              {connecting
+                ? <LoaderCircle className="spinner" size={18} />
+                : state?.paused
+                  ? <Play size={17} fill="currentColor" />
+                  : <Pause size={17} fill="currentColor" />}
+            </button>
+            <button
+              aria-label="Next track"
+              disabled={!deviceReady || !currentTrack || Boolean(pendingKey)}
+              onClick={() => void runControl("next")}
+              type="button"
+            >
+              <SkipForward size={16} fill="currentColor" />
+            </button>
+          </div>
+        )}
+
+        <div className="player-status">
+          {currentTrack && state && (
+            <div className="player-progress" aria-label="Playback progress">
+              <span>{formatTime(elapsed)}</span>
+              <div>
+                <i style={{ width: `${(elapsed / Math.max(state.duration, 1)) * 100}%` }} />
+              </div>
+              <span>{formatTime(state.duration)}</span>
+            </div>
+          )}
+          {currentTrack && currentTrackUrl ? (
+            <a
+              aria-label={`Open current ${spotifyItemKind(currentTrack.uri)} in Spotify`}
+              href={currentTrackUrl}
+              rel="noreferrer"
+              target="_blank"
+            >
+              <ExternalLink size={14} />
+            </a>
+          ) : (
+            <span
+              className={`player-dot ${deviceReady ? "ready" : ""}`}
+              title={deviceReady ? "Player ready" : "Player unavailable"}
+            />
+          )}
+        </div>
+      </aside>
+    </PlaybackContext.Provider>
+  );
+}
+
+function loadSpotifySdk() {
+  if (window.Spotify) return Promise.resolve(window.Spotify);
+  if (sdkPromise) return sdkPromise;
+
+  sdkPromise = new Promise<SpotifyNamespace>((resolve, reject) => {
+    const previousReady = window.onSpotifyWebPlaybackSDKReady;
+    let script = document.getElementById("spotify-web-playback-sdk") as HTMLScriptElement | null;
+    let settled = false;
+
+    const restoreReadyHandler = () => {
+      if (window.onSpotifyWebPlaybackSDKReady === handleReady) {
+        window.onSpotifyWebPlaybackSDKReady = previousReady;
+      }
+    };
+    const fail = (message: string) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      script?.removeEventListener("error", handleError);
+      script?.remove();
+      restoreReadyHandler();
+      sdkPromise = null;
+      reject(new Error(message));
+    };
+    const handleReady = () => {
+      if (settled) return;
+      try {
+        previousReady?.();
+      } catch {
+        // Another SDK consumer should not prevent this player from connecting.
+      }
+      if (!window.Spotify) {
+        fail("Spotify’s browser player did not initialize.");
+        return;
+      }
+      settled = true;
+      window.clearTimeout(timeout);
+      script?.removeEventListener("error", handleError);
+      restoreReadyHandler();
+      resolve(window.Spotify);
+    };
+    const handleError = () => {
+      fail("Spotify’s browser player could not be loaded.");
+    };
+    const timeout = window.setTimeout(
+      () => fail("Spotify’s browser player took too long to load."),
+      15_000,
+    );
+
+    window.onSpotifyWebPlaybackSDKReady = handleReady;
+    let appendScript = false;
+    if (!script) {
+      script = document.createElement("script");
+      script.id = "spotify-web-playback-sdk";
+      script.src = "https://sdk.scdn.co/spotify-player.js";
+      script.async = true;
+      appendScript = true;
+    }
+    script.addEventListener("error", handleError, { once: true });
+    if (appendScript) document.head.appendChild(script);
+  });
+  return sdkPromise;
+}
+
+async function fetchPlaybackToken() {
+  if (tokenPromise) return tokenPromise;
+  tokenPromise = requestPlaybackToken().finally(() => {
+    tokenPromise = null;
+  });
+  return tokenPromise;
+}
+
+async function requestPlaybackToken() {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 12_000);
+  let response: Response;
+  try {
+    response = await fetch("/api/playback/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new PlaybackClientError(
+        "Spotify playback authorization took too long. Try the player again.",
+      );
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+  let body: { accessToken?: string; error?: string; reconnect?: boolean } = {};
+  try {
+    body = (await response.json()) as typeof body;
+  } catch {
+    // Use the stable fallback below for proxy or platform errors.
+  }
+  if (!response.ok || !body.accessToken) {
+    throw new PlaybackClientError(
+      body.error || "Spotify playback authorization failed.",
+      Boolean(body.reconnect) || response.status === 401,
+    );
+  }
+  return body.accessToken;
+}
+
+async function errorFromResponse(response: Response, fallback: string) {
+  let body: { error?: string; reconnect?: boolean } = {};
+  try {
+    body = (await response.json()) as typeof body;
+  } catch {
+    // Use the caller's fallback for non-JSON responses.
+  }
+  return new PlaybackClientError(
+    body.error || fallback,
+    Boolean(body.reconnect) || response.status === 401,
+  );
+}
+
+function abortable<T>(promise: Promise<T>, signal: AbortSignal) {
+  if (signal.aborted) {
+    return Promise.reject(new DOMException("Playback command timed out.", "AbortError"));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const handleAbort = () => {
+      reject(new DOMException("Playback command timed out.", "AbortError"));
+    };
+    signal.addEventListener("abort", handleAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", handleAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", handleAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+function spotifyItemKind(uri: string) {
+  const [, kind] = uri.split(":");
+  return kind === "episode" ? "episode" : "track";
+}
+
+function spotifyWebUrl(uri: string) {
+  const [, kind, id] = uri.split(":");
+  return /^(track|episode)$/.test(kind) && /^[a-zA-Z0-9]{22}$/.test(id)
+    ? `https://open.spotify.com/${kind}/${id}`
+    : "";
+}
+
+function messageFrom(error: unknown) {
+  return error instanceof Error ? error.message : "Spotify playback is unavailable.";
+}
+
+function formatTime(ms: number) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  return `${minutes}:${String(totalSeconds % 60).padStart(2, "0")}`;
+}

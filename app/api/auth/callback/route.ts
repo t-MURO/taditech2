@@ -35,6 +35,7 @@ export async function GET(request: Request) {
     access_token?: string;
     expires_in?: number;
     refresh_token?: string;
+    scope?: string;
   };
   if (!tokenResponse.ok || !tokens.access_token || !tokens.expires_in) {
     return NextResponse.redirect(new URL("/?auth_error=token_exchange", request.url));
@@ -43,6 +44,7 @@ export async function GET(request: Request) {
     access_token: tokens.access_token,
     expires_in: tokens.expires_in,
     refresh_token: tokens.refresh_token,
+    scope: tokens.scope,
   });
   return NextResponse.redirect(new URL("/?connected=1", request.url));
 }
