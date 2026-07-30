@@ -1,4 +1,4 @@
-# Tadi Tech v2
+# Tadi Tech 2.0
 
 A modern Spotify companion for:
 
