@@ -20,9 +20,8 @@ and a Spotify client secret are not required.
 4. Run the app and open `http://127.0.0.1:3000` (Spotify does not allow
    `localhost` callback URLs).
 
-For a deployed site, add its HTTPS origin followed by `/api/auth/callback` as
-an additional Redirect URI. The hosted app also accepts `/callback` when that
-exact URL is set in both `SPOTIFY_REDIRECT_URI` and Spotify's dashboard.
+For a deployed site, add its HTTPS origin followed by
+`/api/auth/callback` as an additional Redirect URI.
 
 ## Browser playback
 
