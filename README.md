@@ -49,6 +49,7 @@ npm run dev
 Validation:
 
 ```bash
+npm test
 npm run lint
 npx tsc --noEmit
 npm run build
@@ -57,9 +58,12 @@ npm run build
 ## Spotify API notes
 
 Spotify does not provide a tailored endpoint for new releases from followed
-artists. Tadi Tech paginates the followed-artist list, makes one combined
-album/single lookup per artist with bounded concurrency, deduplicates releases,
-respects rate limits, and keeps the result in memory for 15 minutes.
+artists. Tadi Tech only starts a scan after an explicit click, advances through
+the followed-artist list in small sequential batches, deduplicates releases,
+and saves each completed batch in memory so an interrupted scan can continue.
+For ordinary rate limits it honors Spotify's complete `Retry-After` window and
+then resumes. Development Mode quota exhaustion is reported separately because
+Spotify does not provide a retry time for it.
 
 Audio Features (including BPM, key, energy, and danceability) are unavailable
 to Spotify apps created after November 2024, so v2 uses supported metadata only.

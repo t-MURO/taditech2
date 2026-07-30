@@ -20,6 +20,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { preferredSpotifyImage } from "@/lib/spotify-data";
 
 type SpotifyArtist = { name: string; uri: string };
 type SpotifyImage = { url: string; height?: number; width?: number };
@@ -29,8 +30,12 @@ type SpotifyTrack = {
   type?: string;
   name: string;
   duration_ms: number;
-  artists: SpotifyArtist[];
-  album: { name: string; uri: string; images: SpotifyImage[] };
+  artists?: SpotifyArtist[] | null;
+  album?: {
+    name: string;
+    uri: string;
+    images?: SpotifyImage[] | null;
+  } | null;
 };
 type SpotifyState = {
   paused: boolean;
@@ -383,6 +388,7 @@ export function PlaybackProvider({
 
   const currentTrack = state?.track_window.current_track;
   const currentTrackUrl = currentTrack ? spotifyWebUrl(currentTrack.uri) : "";
+  const currentTrackImage = preferredSpotifyImage(currentTrack?.album?.images);
   const elapsed = state
     ? Math.min(
         state.duration,
@@ -435,8 +441,8 @@ export function PlaybackProvider({
       {children}
       <aside className="browser-player" aria-label="Spotify browser player">
         <div className="player-track">
-          {currentTrack?.album.images[0] ? (
-            <img alt="" src={currentTrack.album.images[0].url} />
+          {currentTrackImage ? (
+            <img alt="" src={currentTrackImage} />
           ) : (
             <div className="player-art-placeholder"><MonitorSpeaker size={20} /></div>
           )}
@@ -453,7 +459,7 @@ export function PlaybackProvider({
             </strong>
             <span aria-live={error ? "assertive" : "polite"} role={error ? "alert" : "status"}>
               {currentTrack
-                ? error || currentTrack.artists.map((artist) => artist.name).join(", ")
+                ? error || currentTrack.artists?.map((artist) => artist.name).join(", ")
                 : error || "Choose Play on any release or playlist track."}
             </span>
           </div>

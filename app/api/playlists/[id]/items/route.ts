@@ -1,33 +1,32 @@
 import { apiError, spotifyJson } from "@/lib/spotify";
+import {
+  normalizeSpotifyTrack,
+  type NormalizedSpotifyTrack,
+} from "@/lib/spotify-data";
 
 export const dynamic = "force-dynamic";
 
-type Track = {
-  id: string | null;
-  uri: string;
-  name: string;
-  type: string;
-  duration_ms?: number;
-  explicit?: boolean;
-  popularity?: number;
-  external_urls?: { spotify: string };
-  artists?: Array<{ id: string; name: string; external_urls?: { spotify: string } }>;
-  album?: {
-    id: string;
-    name: string;
-    release_date?: string;
-    images?: Array<{ url: string }>;
-    external_urls?: { spotify: string };
-  };
-};
 type SpotifyItem = {
+  added_at?: unknown;
+  added_by?: { id?: unknown } | null;
+  is_local?: unknown;
+  item?: unknown;
+  track?: unknown;
+};
+type ItemPage = { items?: Array<SpotifyItem | null> | null; next?: unknown };
+
+type NormalizedPlaylistItem = {
   added_at: string | null;
   added_by?: { id: string } | null;
   is_local: boolean;
-  item?: Track | null;
-  track?: Track | null;
+  item: NormalizedSpotifyTrack;
+  originalIndex: number;
+  key: string;
 };
-type ItemPage = { items: SpotifyItem[]; next: string | null; total: number };
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
 
 export async function GET(
   _request: Request,
@@ -35,27 +34,34 @@ export async function GET(
 ) {
   try {
     const { id } = await context.params;
-    const output: Array<SpotifyItem & { item: Track; originalIndex: number; key: string }> = [];
+    const output: NormalizedPlaylistItem[] = [];
     let next: string | null = `/playlists/${encodeURIComponent(id)}/items?limit=50`;
+    const visitedPages = new Set<string>();
     let index = 0;
-    while (next) {
+    while (next && !visitedPages.has(next)) {
+      visitedPages.add(next);
       const page: ItemPage = await spotifyJson<ItemPage>(next);
-      for (const entry of page.items) {
-        const item = entry.item ?? entry.track ?? {
-          id: null,
-          uri: `spotify:unavailable:${index}`,
-          name: "Unavailable item",
-          type: "unknown",
-        };
+      const entries = Array.isArray(page.items) ? page.items : [];
+      for (const rawEntry of entries) {
+        const entry = rawEntry && typeof rawEntry === "object" ? rawEntry : {};
+        const item = normalizeSpotifyTrack(entry.item ?? entry.track, index);
+        const addedById = nonEmptyString(entry.added_by?.id);
+        const addedAt = nonEmptyString(entry.added_at) ?? null;
         output.push({
-          ...entry,
+          added_at: addedAt,
+          ...(entry.added_by === null
+            ? { added_by: null }
+            : addedById
+              ? { added_by: { id: addedById } }
+              : {}),
+          is_local: entry.is_local === true,
           item,
           originalIndex: index,
-          key: `${index}:${item.uri}:${entry.added_at || "unknown"}`,
+          key: `${index}:${item.uri}:${addedAt ?? "unknown"}`,
         });
         index += 1;
       }
-      next = page.next;
+      next = nonEmptyString(page.next) ?? null;
     }
     return Response.json({ items: output });
   } catch (error) {

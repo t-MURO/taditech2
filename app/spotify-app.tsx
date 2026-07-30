@@ -19,13 +19,14 @@ import {
   Shuffle,
   Sparkles,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { preferredSpotifyImage } from "@/lib/spotify-data";
 import { PlaybackProvider, usePlayback } from "./spotify-player";
 
 type User = {
   id: string;
   display_name: string | null;
-  images?: Array<{ url: string }>;
+  images?: Array<{ url: string }> | null;
 };
 type Release = {
   id: string;
@@ -33,7 +34,7 @@ type Release = {
   album_type: string;
   release_date: string;
   total_tracks: number;
-  images: Array<{ url: string }>;
+  images?: Array<{ url: string }> | null;
   artists: Array<{ id: string; name: string }>;
   external_urls: { spotify: string };
 };
@@ -43,7 +44,7 @@ type Playlist = {
   collaborative: boolean;
   public: boolean | null;
   snapshot_id: string;
-  images: Array<{ url: string }>;
+  images?: Array<{ url: string }> | null;
   external_urls: { spotify: string };
   itemCount: number;
 };
@@ -79,9 +80,24 @@ type SortKey =
   | "release"
   | "added";
 
-let releaseMemoryCache:
-  | { releases: Release[]; artistCount: number; timestamp: number }
-  | undefined;
+type ReleaseScanSnapshot = {
+  releases: Release[];
+  artistCount: number;
+  scannedArtists: number;
+  nextCursor: string | null;
+  complete: boolean;
+  timestamp: number;
+};
+
+type ReleaseBatch = {
+  releases: Release[];
+  artistCount: number;
+  scannedArtists: number;
+  nextCursor: string | null;
+  complete: boolean;
+};
+
+let releaseMemoryCache: ReleaseScanSnapshot | undefined;
 
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -180,33 +196,106 @@ function ReleasesView() {
   const playback = usePlayback();
   const [releases, setReleases] = useState<Release[]>(() => releaseMemoryCache?.releases || []);
   const [artistCount, setArtistCount] = useState(() => releaseMemoryCache?.artistCount || 0);
-  const [loading, setLoading] = useState(() => !releaseMemoryCache);
+  const [scannedArtists, setScannedArtists] = useState(
+    () => releaseMemoryCache?.scannedArtists || 0,
+  );
+  const [scanComplete, setScanComplete] = useState(
+    () => releaseMemoryCache?.complete || false,
+  );
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState("newest");
+  const scanController = useRef<AbortController | null>(null);
 
-  const load = useCallback(async (force = false) => {
-    if (!force && releaseMemoryCache && Date.now() - releaseMemoryCache.timestamp < 15 * 60_000) {
-      setReleases(releaseMemoryCache.releases);
-      setArtistCount(releaseMemoryCache.artistCount);
-      setLoading(false);
-      return;
+  const scan = useCallback(async () => {
+    scanController.current?.abort();
+    const controller = new AbortController();
+    scanController.current = controller;
+
+    const resumable =
+      releaseMemoryCache &&
+      !releaseMemoryCache.complete &&
+      releaseMemoryCache.nextCursor
+        ? releaseMemoryCache
+        : undefined;
+    const merged = new Map(
+      (resumable?.releases ?? []).map((release) => [release.id, release]),
+    );
+    let cursor = resumable?.nextCursor ?? null;
+    let scanned = resumable?.scannedArtists ?? 0;
+    let total = resumable?.artistCount ?? 0;
+
+    if (!resumable) {
+      releaseMemoryCache = undefined;
+      setReleases([]);
+      setArtistCount(0);
+      setScannedArtists(0);
+      setScanComplete(false);
+    } else {
+      setReleases(resumable.releases);
+      setArtistCount(resumable.artistCount);
+      setScannedArtists(resumable.scannedArtists);
     }
+
     setLoading(true);
     setError("");
+
     try {
-      const data = await getJson<{ releases: Release[]; artistCount: number }>("/api/releases");
-      releaseMemoryCache = { ...data, timestamp: Date.now() };
-      setReleases(data.releases);
-      setArtistCount(data.artistCount);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Could not load releases.");
+      while (true) {
+        const data = await getJson<ReleaseBatch>(
+          cursor
+            ? `/api/releases?after=${encodeURIComponent(cursor)}`
+            : "/api/releases",
+          { signal: controller.signal },
+        );
+
+        for (const release of data.releases) merged.set(release.id, release);
+        scanned += data.scannedArtists;
+        total = Math.max(total, data.artistCount, scanned);
+
+        const sorted = Array.from(merged.values()).sort((a, b) =>
+          b.release_date.localeCompare(a.release_date),
+        );
+        const nextCursor = data.complete ? null : data.nextCursor;
+        if (nextCursor && nextCursor === cursor) {
+          throw new Error("Spotify returned the same artist page twice. Continue the scan later.");
+        }
+
+        const snapshot: ReleaseScanSnapshot = {
+          releases: sorted,
+          artistCount: total,
+          scannedArtists: scanned,
+          nextCursor,
+          complete: !nextCursor,
+          timestamp: Date.now(),
+        };
+        releaseMemoryCache = snapshot;
+        setReleases(sorted);
+        setArtistCount(total);
+        setScannedArtists(scanned);
+        setScanComplete(snapshot.complete);
+
+        if (!nextCursor) break;
+        cursor = nextCursor;
+      }
+    } catch (scanError) {
+      if (
+        !(scanError instanceof DOMException && scanError.name === "AbortError")
+      ) {
+        setError(
+          scanError instanceof Error ? scanError.message : "Could not scan releases.",
+        );
+      }
     } finally {
-      setLoading(false);
+      if (scanController.current === controller) {
+        scanController.current = null;
+        setLoading(false);
+      }
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => () => scanController.current?.abort(), []);
 
   const visible = useMemo(() => {
     const needle = query.toLowerCase();
@@ -225,6 +314,15 @@ function ReleasesView() {
     });
   }, [query, releases, sort]);
 
+  const hasProgress = scannedArtists > 0;
+  const scanButtonLabel = loading
+    ? "Scanning…"
+    : scanComplete
+      ? "Scan again"
+      : hasProgress
+        ? "Continue scan"
+        : "Check now";
+
   return (
     <main className="main">
       <header className="page-heading">
@@ -233,7 +331,14 @@ function ReleasesView() {
           <h1>Fresh from your orbit.</h1>
         </div>
         <div className="stats">
-          <div className="stat"><strong>{artistCount || "—"}</strong><span>artists</span></div>
+          <div className="stat">
+            <strong>
+              {hasProgress && !scanComplete && artistCount
+                ? `${scannedArtists}/${artistCount}`
+                : artistCount || "—"}
+            </strong>
+            <span>{scanComplete ? "artists scanned" : "artists"}</span>
+          </div>
           <div className="stat"><strong>{releases.length || "—"}</strong><span>releases</span></div>
         </div>
       </header>
@@ -259,42 +364,81 @@ function ReleasesView() {
             <option value="artist">Artist A–Z</option>
             <option value="title">Title A–Z</option>
           </select>
-          <button className="secondary-button" onClick={() => void load(true)} type="button">
-            <RefreshCw size={14} /> Refresh
+          <button
+            className="secondary-button"
+            disabled={loading}
+            onClick={() => void scan()}
+            type="button"
+          >
+            <RefreshCw className={loading ? "spinner" : undefined} size={14} />
+            {scanButtonLabel}
           </button>
         </div>
       </div>
-      {loading ? (
+      {loading && (
         <div className="loading-state">
           <LoaderCircle className="spinner" size={26} />
           <div>
-            <strong>Checking every artist you follow</strong><br />
-            <small>This can take a moment for a large library.</small>
+            <strong>
+              {artistCount
+                ? `Checked ${scannedArtists} of ${artistCount} followed artists`
+                : "Finding the artists you follow"}
+            </strong>
+            <br />
+            <small>
+              Spotify requests run in small batches and pause automatically when needed.
+            </small>
           </div>
         </div>
-      ) : error ? (
+      )}
+      {!loading && error && (
         <div className="error-state">
           <span>{error}</span>
-          <button className="secondary-button" onClick={() => void load(true)}>Try again</button>
+          <button className="secondary-button" onClick={() => void scan()}>
+            {hasProgress ? "Continue scan" : "Try again"}
+          </button>
         </div>
-      ) : visible.length === 0 ? (
-        <div className="empty"><Music2 size={28} /><span>No releases match this search.</span></div>
-      ) : (
+      )}
+      {!loading && !error && !scanComplete && (
+        <div className="empty">
+          <Sparkles size={28} />
+          <strong>{hasProgress ? "Your partial scan is saved." : "Check when you're ready."}</strong>
+          <span>
+            {hasProgress
+              ? `Continue from artist ${scannedArtists + 1}; completed batches will not be fetched again.`
+              : "No release requests are sent until you start the scan."}
+          </span>
+          <button className="primary-button" onClick={() => void scan()} type="button">
+            {hasProgress ? "Continue release scan" : "Check for new releases"}
+            <ArrowRight size={15} />
+          </button>
+        </div>
+      )}
+      {!loading && !error && scanComplete && visible.length === 0 && (
+        <div className="empty">
+          <Music2 size={28} />
+          <span>
+            {query ? "No releases match this search." : "No recent releases were found."}
+          </span>
+        </div>
+      )}
+      {visible.length > 0 && (
         <div className="release-grid">
           {visible.map((release) => {
             const playbackKey = `album:${release.id}`;
+            const coverUrl = preferredSpotifyImage(release.images);
             return (
             <article
               className="release-card"
               key={release.id}
             >
               <div className="cover-wrap">
-                {release.images[0] && (
+                {coverUrl && (
                   <img
                     alt=""
                     decoding="async"
                     loading="lazy"
-                    src={(release.images[1] || release.images[0]).url}
+                    src={coverUrl}
                   />
                 )}
               </div>
@@ -404,9 +548,9 @@ function PlaylistsView() {
 
   const valueFor = useCallback((entry: PlaylistItem, key: SortKey) => {
     const track = entry.item;
-    if (key === "name") return track.name.toLowerCase();
-    if (key === "artist") return track.artists?.[0]?.name.toLowerCase() || "";
-    if (key === "album") return track.album?.name.toLowerCase() || "";
+    if (key === "name") return (track.name ?? "").toLowerCase();
+    if (key === "artist") return (track.artists?.[0]?.name ?? "").toLowerCase();
+    if (key === "album") return (track.album?.name ?? "").toLowerCase();
     if (key === "duration") return track.duration_ms || 0;
     if (key === "release") return track.album?.release_date || "";
     if (key === "added") return entry.added_at || "";
@@ -508,19 +652,21 @@ function PlaylistsView() {
       ) : (
         <div className="playlist-layout">
           <aside className="playlist-sidebar playlist-list" aria-label="Editable playlists">
-            {playlists.map((playlist) => (
+            {playlists.map((playlist) => {
+              const coverUrl = preferredSpotifyImage(playlist.images);
+              return (
               <button
                 className={`playlist-row ${selected?.id === playlist.id ? "selected" : ""}`}
                 key={playlist.id}
                 onClick={() => setSelected(playlist)}
                 type="button"
               >
-                {playlist.images[0] ? (
+                {coverUrl ? (
                   <img
                     alt=""
                     decoding="async"
                     loading="lazy"
-                    src={(playlist.images[1] || playlist.images[0]).url}
+                    src={coverUrl}
                   />
                 ) : (
                   <div className="playlist-cover-placeholder"><Music2 size={20} /></div>
@@ -534,7 +680,8 @@ function PlaylistsView() {
                 </div>
                 <ChevronRight size={16} color="var(--dim)" />
               </button>
-            ))}
+              );
+            })}
           </aside>
           <section className="playlist-panel">
             <div className="playlist-panel-head">

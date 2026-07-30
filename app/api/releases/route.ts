@@ -2,9 +2,16 @@ import { apiError, spotifyJson } from "@/lib/spotify";
 
 export const dynamic = "force-dynamic";
 
+const RELEASE_BATCH_SIZE = 8;
+
 type Artist = { id: string; name: string };
 type ArtistPage = {
-  artists: { items: Artist[]; next: string | null; total: number };
+  artists: {
+    items?: Artist[] | null;
+    next?: string | null;
+    total?: number;
+    cursors?: { after?: string | null };
+  };
 };
 type Album = {
   id: string;
@@ -17,42 +24,57 @@ type Album = {
   artists: Array<{ id: string; name: string; external_urls?: { spotify: string } }>;
   external_urls: { spotify: string };
 };
-type AlbumPage = { items: Album[] };
+type AlbumPage = { items?: Album[] | null };
 
-async function allFollowedArtists() {
-  const artists: Artist[] = [];
-  let next: string | null = "/me/following?type=artist&limit=50";
-  while (next) {
-    const page: ArtistPage = await spotifyJson<ArtistPage>(next);
-    artists.push(...page.artists.items);
-    next = page.artists.next;
+function cursorFrom(page: ArtistPage["artists"]) {
+  if (!page.next) return null;
+  if (page.cursors?.after) return page.cursors.after;
+  try {
+    return new URL(page.next).searchParams.get("after");
+  } catch {
+    return null;
   }
-  return artists;
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const artists = await allFollowedArtists();
-    const albums: Album[] = [];
-    let cursor = 0;
-    const workers = Array.from(
-      { length: Math.min(5, Math.max(artists.length, 1)) },
-      async () => {
-        while (cursor < artists.length) {
-          const artist = artists[cursor++];
-          const page = await spotifyJson<AlbumPage>(
-            `/artists/${artist.id}/albums?include_groups=album,single&limit=8`,
-          );
-          albums.push(...page.items);
-        }
-      },
+    const requestedCursor = new URL(request.url).searchParams.get("after");
+    const params = new URLSearchParams({
+      type: "artist",
+      limit: String(RELEASE_BATCH_SIZE),
+    });
+    if (requestedCursor) params.set("after", requestedCursor);
+
+    const spotifyInit = { signal: request.signal };
+    const page = await spotifyJson<ArtistPage>(
+      `/me/following?${params}`,
+      spotifyInit,
     );
-    await Promise.all(workers);
+    const artists = (page.artists.items ?? []).filter(
+      (artist) => artist && typeof artist.id === "string",
+    );
+    const albums: Album[] = [];
+
+    // Keep the batch sequential. If Spotify asks us to pause, spotifyJson waits
+    // for the full Retry-After window before this loop continues.
+    for (const artist of artists) {
+      const albumPage = await spotifyJson<AlbumPage>(
+        `/artists/${encodeURIComponent(artist.id)}/albums?include_groups=album,single&limit=8`,
+        spotifyInit,
+      );
+      albums.push(...(albumPage.items ?? []));
+    }
+
     const unique = Array.from(new Map(albums.map((album) => [album.id, album])).values())
       .sort((a, b) => b.release_date.localeCompare(a.release_date));
+    const nextCursor = cursorFrom(page.artists);
+
     return Response.json({
       releases: unique,
-      artistCount: artists.length,
+      artistCount: Math.max(page.artists.total ?? 0, artists.length),
+      scannedArtists: artists.length,
+      nextCursor,
+      complete: !nextCursor,
       fetchedAt: new Date().toISOString(),
     });
   } catch (error) {

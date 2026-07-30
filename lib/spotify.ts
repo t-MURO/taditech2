@@ -137,55 +137,138 @@ export async function getAccessToken() {
   return refreshAccessToken(refresh);
 }
 
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+type SpotifyErrorBody = {
+  message?: string;
+  reason?: string;
+  error?:
+    | string
+    | {
+        message?: string;
+        reason?: string;
+      };
+};
+
+let spotifyBlockedUntil = 0;
+
+function delay(ms: number, signal?: AbortSignal) {
+  if (!signal) {
+    return new Promise<void>((resolve) => setTimeout(resolve, ms));
+  }
+  if (signal.aborted) {
+    return Promise.reject(
+      signal.reason ?? new DOMException("The Spotify request was cancelled.", "AbortError"),
+    );
+  }
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", handleAbort);
+      resolve();
+    }, ms);
+    const handleAbort = () => {
+      clearTimeout(timer);
+      reject(
+        signal.reason ?? new DOMException("The Spotify request was cancelled.", "AbortError"),
+      );
+    };
+    signal.addEventListener("abort", handleAbort, { once: true });
+  });
+}
+
+function errorDetails(body: SpotifyErrorBody) {
+  const nested = typeof body.error === "object" ? body.error : undefined;
+  return {
+    message:
+      typeof body.error === "string"
+        ? body.error
+        : nested?.message || body.message,
+    reason: nested?.reason || body.reason,
+  };
+}
+
+async function responseErrorDetails(
+  response: Response,
+): Promise<{ message?: string; reason?: string }> {
+  try {
+    return errorDetails((await response.clone().json()) as SpotifyErrorBody);
+  } catch {
+    return {};
+  }
+}
+
+function retryDelayMs(response: Response, attempt: number) {
+  const retryAfter = response.headers.get("Retry-After");
+  const seconds = Number(retryAfter);
+  if (retryAfter && Number.isFinite(seconds) && seconds >= 0) {
+    return seconds * 1000;
+  }
+  const retryDate = retryAfter ? Date.parse(retryAfter) : Number.NaN;
+  if (Number.isFinite(retryDate)) {
+    return Math.max(0, retryDate - Date.now());
+  }
+  return Math.min(1000 * 2 ** attempt, 30_000);
 }
 
 export async function spotifyFetch(
   pathOrUrl: string,
   init: RequestInit = {},
-  attempt = 0,
 ): Promise<Response> {
-  const accessToken = await getAccessToken();
-  const response = await fetch(
-    pathOrUrl.startsWith("http") ? pathOrUrl : `${API_ROOT}${pathOrUrl}`,
-    {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        ...(init.body ? { "Content-Type": "application/json" } : {}),
-        ...init.headers,
+  const signal = init.signal ?? undefined;
+  let rateLimitAttempts = 0;
+  let serverAttempts = 0;
+
+  while (true) {
+    const gateDelay = spotifyBlockedUntil - Date.now();
+    if (gateDelay > 0) await delay(gateDelay, signal);
+
+    const accessToken = await getAccessToken();
+    const response = await fetch(
+      pathOrUrl.startsWith("http") ? pathOrUrl : `${API_ROOT}${pathOrUrl}`,
+      {
+        ...init,
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          ...(init.body ? { "Content-Type": "application/json" } : {}),
+          ...init.headers,
+        },
       },
-    },
-  );
-  if (response.status === 429 && attempt < 2) {
-    const retryAfter = Math.min(Number(response.headers.get("Retry-After") || 1), 10);
-    await delay(retryAfter * 1000);
-    return spotifyFetch(pathOrUrl, init, attempt + 1);
+    );
+
+    if (response.status === 429) {
+      const details = await responseErrorDetails(response);
+      if (details.reason === "QUOTA_EXCEEDED") return response;
+
+      const waitMs = retryDelayMs(response, rateLimitAttempts);
+      rateLimitAttempts += 1;
+      spotifyBlockedUntil = Math.max(
+        spotifyBlockedUntil,
+        Date.now() + waitMs + 250,
+      );
+      await delay(spotifyBlockedUntil - Date.now(), signal);
+      continue;
+    }
+
+    if (response.status >= 500 && serverAttempts < 2) {
+      await delay(400 * 2 ** serverAttempts, signal);
+      serverAttempts += 1;
+      continue;
+    }
+
+    return response;
   }
-  if (response.status >= 500 && attempt < 2) {
-    await delay(400 * 2 ** attempt);
-    return spotifyFetch(pathOrUrl, init, attempt + 1);
-  }
-  return response;
 }
 
 export async function spotifyJson<T>(pathOrUrl: string, init: RequestInit = {}) {
   const response = await spotifyFetch(pathOrUrl, init);
   if (!response.ok) {
     let message = "Spotify could not complete this request.";
+    let code: string | undefined;
     try {
-      const body = (await response.json()) as {
-        error?: { message?: string; reason?: string } | string;
-      };
-      if (typeof body.error === "string") message = body.error;
-      else if (body.error?.message) message = body.error.message;
-      if (
-        body.error &&
-        typeof body.error !== "string" &&
-        body.error.reason === "QUOTA_EXCEEDED"
-      ) {
-        message = "This Spotify developer account has reached its request quota.";
+      const details = errorDetails((await response.json()) as SpotifyErrorBody);
+      if (details.message) message = details.message;
+      if (details.reason === "QUOTA_EXCEEDED") {
+        code = "quota_exceeded";
+        message =
+          "Spotify's Development Mode quota is exhausted. Spotify did not provide a retry time, so continue the scan later.";
       }
     } catch {
       // Keep the safe fallback message.
@@ -194,6 +277,7 @@ export async function spotifyJson<T>(pathOrUrl: string, init: RequestInit = {}) 
       message,
       response.status,
       Number(response.headers.get("Retry-After") || 0) || undefined,
+      code,
     );
   }
   return (await response.json()) as T;
