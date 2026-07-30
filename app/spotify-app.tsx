@@ -35,22 +35,24 @@ import {
   type NormalizedSpotifyUserReference,
   type SpotifyImage,
 } from "@/lib/spotify-data";
+import {
+  clearCachedReleaseScan,
+  loadCachedReleaseScan,
+  releaseCacheIsFresh,
+  writeCachedReleaseBatch,
+} from "@/lib/release-cache";
+import {
+  groupReleasesByMonth,
+  type Release,
+  type ReleaseBatch,
+  type ReleaseScanSnapshot,
+} from "@/lib/release-data";
 import { PlaybackProvider, usePlayback } from "./spotify-player";
 
 type User = {
   id: string;
   display_name: string | null;
   images?: Array<{ url: string }> | null;
-};
-type Release = {
-  id: string;
-  name: string;
-  album_type: string;
-  release_date: string;
-  total_tracks: number;
-  images?: Array<{ url: string }> | null;
-  artists: Array<{ id: string; name: string }>;
-  external_urls: { spotify: string };
 };
 type Playlist = {
   id: string;
@@ -145,26 +147,15 @@ type TrackColumn = {
   render: (entry: PlaylistItem, displayIndex: number) => ReactNode;
 };
 
-type ReleaseScanSnapshot = {
-  releases: Release[];
-  artistCount: number | null;
-  scannedArtists: number;
-  nextCursor: string | null;
-  complete: boolean;
-  timestamp: number;
-};
-
-type ReleaseBatch = {
-  releases: Release[];
-  artistCount: number | null;
-  scannedArtists: number;
-  nextCursor: string | null;
-  complete: boolean;
-};
-
-let releaseMemoryCache: ReleaseScanSnapshot | undefined;
+const releaseMemoryCache = new Map<string, ReleaseScanSnapshot>();
 const EMPTY_VALUE = "\u2014";
 const COLUMN_STORAGE_KEY = "taditech-playlist-columns-v1";
+
+function freshReleaseSnapshot(snapshot?: ReleaseScanSnapshot) {
+  return snapshot && releaseCacheIsFresh([snapshot], snapshot.complete)
+    ? snapshot
+    : undefined;
+}
 
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -211,6 +202,16 @@ function formatReleaseDate(date?: string | null, precision?: string) {
     }).format(parsed);
   }
   return formatDate(date);
+}
+
+function formatCheckedAt(value?: string | null) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Intl.DateTimeFormat("en", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(parsed);
 }
 
 function titleCase(value: string) {
@@ -890,18 +891,90 @@ function Landing({ authError }: { authError: string }) {
   );
 }
 
-function ReleasesView() {
+function ReleaseCard({ release }: { release: Release }) {
   const playback = usePlayback();
-  const [releases, setReleases] = useState<Release[]>(() => releaseMemoryCache?.releases || []);
+  const playbackKey = `album:${release.id}`;
+  const coverUrl = preferredSpotifyImage(release.images);
+
+  return (
+    <article className="release-card">
+      <div className="cover-wrap">
+        {coverUrl && (
+          <img alt="" decoding="async" loading="lazy" src={coverUrl} />
+        )}
+      </div>
+      <div className="release-actions">
+        <span className="release-badge">{release.album_type}</span>
+        <div className="release-action-buttons">
+          <button
+            aria-label={`Play ${release.name} in this browser`}
+            disabled={!playback.deviceReady || Boolean(playback.pendingKey)}
+            onClick={() =>
+              void playback.play(
+                { contextUri: `spotify:album:${release.id}` },
+                playbackKey,
+              )
+            }
+            title={
+              playback.authorized
+                ? "Play in browser"
+                : "Reconnect Spotify to enable browser playback"
+            }
+            type="button"
+          >
+            {playback.pendingKey === playbackKey
+              ? <LoaderCircle className="spinner" size={16} />
+              : <Play size={16} fill="currentColor" />}
+          </button>
+          <a
+            aria-label={`Open ${release.name} in Spotify`}
+            href={release.external_urls.spotify}
+            rel="noreferrer"
+            target="_blank"
+            title="Open in Spotify"
+          >
+            <ExternalLink size={15} />
+          </a>
+        </div>
+      </div>
+      <h3>
+        <a href={release.external_urls.spotify} rel="noreferrer" target="_blank">
+          {release.name}
+        </a>
+      </h3>
+      <p>{release.artists.map((artist) => artist.name).join(", ")}</p>
+      <div className="release-meta">
+        <span>
+          {formatReleaseDate(
+            release.release_date,
+            release.release_date_precision,
+          )}
+        </span>
+        <span>{release.total_tracks} track{release.total_tracks === 1 ? "" : "s"}</span>
+      </div>
+    </article>
+  );
+}
+
+function ReleasesView({ userId }: { userId: string }) {
+  const initialSnapshot = freshReleaseSnapshot(releaseMemoryCache.get(userId));
+  const [releases, setReleases] = useState<Release[]>(
+    () => initialSnapshot?.releases ?? [],
+  );
   const [artistCount, setArtistCount] = useState<number | null>(
-    () => releaseMemoryCache?.artistCount ?? null,
+    () => initialSnapshot?.artistCount ?? null,
   );
   const [scannedArtists, setScannedArtists] = useState(
-    () => releaseMemoryCache?.scannedArtists || 0,
+    () => initialSnapshot?.scannedArtists ?? 0,
   );
   const [scanComplete, setScanComplete] = useState(
-    () => releaseMemoryCache?.complete || false,
+    () => initialSnapshot?.complete ?? false,
   );
+  const [lastCheckedAt, setLastCheckedAt] = useState<string | null>(
+    () => initialSnapshot?.fetchedAt ?? null,
+  );
+  const [restoringCache, setRestoringCache] = useState(!initialSnapshot);
+  const [restoredFromCache, setRestoredFromCache] = useState(false);
   const [paused, setPaused] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -909,28 +982,68 @@ function ReleasesView() {
   const [sort, setSort] = useState("newest");
   const scanController = useRef<AbortController | null>(null);
 
+  useEffect(() => {
+    const memorySnapshot = releaseMemoryCache.get(userId);
+    if (freshReleaseSnapshot(memorySnapshot)) {
+      setRestoringCache(false);
+      return;
+    }
+    if (memorySnapshot) releaseMemoryCache.delete(userId);
+
+    let cancelled = false;
+    setRestoringCache(true);
+    void loadCachedReleaseScan(userId)
+      .then((snapshot) => {
+        if (cancelled || !snapshot) return;
+        releaseMemoryCache.set(userId, snapshot);
+        setReleases(snapshot.releases);
+        setArtistCount(snapshot.artistCount);
+        setScannedArtists(snapshot.scannedArtists);
+        setScanComplete(snapshot.complete);
+        setLastCheckedAt(snapshot.fetchedAt);
+        setRestoredFromCache(true);
+      })
+      .finally(() => {
+        if (!cancelled) setRestoringCache(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
+
   const scan = useCallback(async () => {
     scanController.current?.abort();
     const controller = new AbortController();
     scanController.current = controller;
     setPaused(false);
 
+    const storedSnapshot = releaseMemoryCache.get(userId);
+    const previousSnapshot = freshReleaseSnapshot(storedSnapshot);
+    if (storedSnapshot && !previousSnapshot) {
+      releaseMemoryCache.delete(userId);
+    }
     const resumable =
-      releaseMemoryCache &&
-      !releaseMemoryCache.complete &&
-      releaseMemoryCache.nextCursor
-        ? releaseMemoryCache
+      previousSnapshot &&
+      !previousSnapshot.complete &&
+      previousSnapshot.nextCursor
+        ? previousSnapshot
         : undefined;
+    const freshScan = !resumable;
     const merged = new Map(
       (resumable?.releases ?? []).map((release) => [release.id, release]),
     );
     let cursor = resumable?.nextCursor ?? null;
     let scanned = resumable?.scannedArtists ?? 0;
     let total = resumable?.artistCount ?? null;
+    let receivedBatch = false;
 
     if (!resumable) {
-      releaseMemoryCache = undefined;
-      setReleases([]);
+      if (storedSnapshot && !previousSnapshot) {
+        setReleases([]);
+        setLastCheckedAt(null);
+        setRestoredFromCache(false);
+      }
       setArtistCount(null);
       setScannedArtists(0);
       setScanComplete(false);
@@ -948,15 +1061,26 @@ function ReleasesView() {
         if (controller.signal.aborted) {
           throw new DOMException("The release scan was paused.", "AbortError");
         }
+        const requestedCursor = cursor;
         const data = await getJson<ReleaseBatch>(
-          cursor
-            ? `/api/releases?after=${encodeURIComponent(cursor)}`
+          requestedCursor
+            ? `/api/releases?after=${encodeURIComponent(requestedCursor)}`
             : "/api/releases",
           { signal: controller.signal },
         );
         if (controller.signal.aborted) {
           throw new DOMException("The release scan was paused.", "AbortError");
         }
+
+        const nextCursor = data.complete ? null : data.nextCursor;
+        if (nextCursor && nextCursor === requestedCursor) {
+          throw new Error("Spotify returned the same artist page twice. Continue the scan later.");
+        }
+        if (freshScan && !receivedBatch) {
+          await clearCachedReleaseScan(userId);
+        }
+        await writeCachedReleaseBatch(userId, requestedCursor, data);
+        receivedBatch = true;
 
         for (const release of data.releases) merged.set(release.id, release);
         scanned += data.scannedArtists;
@@ -967,11 +1091,7 @@ function ReleasesView() {
         const sorted = Array.from(merged.values()).sort((a, b) =>
           b.release_date.localeCompare(a.release_date),
         );
-        const nextCursor = data.complete ? null : data.nextCursor;
         if (!nextCursor && total === null) total = scanned;
-        if (nextCursor && nextCursor === cursor) {
-          throw new Error("Spotify returned the same artist page twice. Continue the scan later.");
-        }
 
         const snapshot: ReleaseScanSnapshot = {
           releases: sorted,
@@ -979,13 +1099,15 @@ function ReleasesView() {
           scannedArtists: scanned,
           nextCursor,
           complete: !nextCursor,
-          timestamp: Date.now(),
+          fetchedAt: data.fetchedAt,
         };
-        releaseMemoryCache = snapshot;
+        releaseMemoryCache.set(userId, snapshot);
         setReleases(sorted);
         setArtistCount(total);
         setScannedArtists(scanned);
         setScanComplete(snapshot.complete);
+        setLastCheckedAt(snapshot.fetchedAt);
+        setRestoredFromCache(false);
 
         if (!nextCursor) {
           setPaused(false);
@@ -994,6 +1116,13 @@ function ReleasesView() {
         cursor = nextCursor;
       }
     } catch (scanError) {
+      if (freshScan && !receivedBatch && previousSnapshot) {
+        setReleases(previousSnapshot.releases);
+        setArtistCount(previousSnapshot.artistCount);
+        setScannedArtists(previousSnapshot.scannedArtists);
+        setScanComplete(previousSnapshot.complete);
+        setLastCheckedAt(previousSnapshot.fetchedAt);
+      }
       if (
         !(scanError instanceof DOMException && scanError.name === "AbortError")
       ) {
@@ -1007,7 +1136,7 @@ function ReleasesView() {
         setLoading(false);
       }
     }
-  }, []);
+  }, [userId]);
 
   const pauseScan = useCallback(() => {
     const activeScan = scanController.current;
@@ -1019,31 +1148,52 @@ function ReleasesView() {
 
   useEffect(() => () => scanController.current?.abort(), []);
 
-  const visible = useMemo(() => {
+  const releaseGroups = useMemo(() => {
     const needle = query.toLowerCase();
     const filtered = releases.filter((release) =>
       `${release.name} ${release.artists.map((artist) => artist.name).join(" ")}`
         .toLowerCase()
         .includes(needle),
     );
-    return [...filtered].sort((a, b) => {
-      if (sort === "oldest") return a.release_date.localeCompare(b.release_date);
-      if (sort === "artist") {
-        return a.artists[0]?.name.localeCompare(b.artists[0]?.name || "") || 0;
-      }
-      if (sort === "title") return a.name.localeCompare(b.name);
-      return b.release_date.localeCompare(a.release_date);
+
+    const compareReleases = (a: Release, b: Release) => {
+      const dateOrder = b.release_date.localeCompare(a.release_date);
+      const artistOrder = (a.artists[0]?.name ?? "").localeCompare(
+        b.artists[0]?.name ?? "",
+      );
+      const titleOrder = a.name.localeCompare(b.name);
+
+      if (sort === "oldest") return -dateOrder || artistOrder || titleOrder;
+      if (sort === "artist") return artistOrder || dateOrder || titleOrder;
+      if (sort === "title") return titleOrder || artistOrder || dateOrder;
+      return dateOrder || artistOrder || titleOrder;
+    };
+
+    const groups = groupReleasesByMonth(filtered);
+    for (const group of groups) group.releases.sort(compareReleases);
+    groups.sort((a, b) => {
+      if (a.key === "unknown") return b.key === "unknown" ? 0 : 1;
+      if (b.key === "unknown") return -1;
+      const monthOrder = a.key.localeCompare(b.key);
+      return sort === "oldest" ? monthOrder : -monthOrder;
     });
+    return groups;
   }, [query, releases, sort]);
 
+  const visibleCount = releaseGroups.reduce(
+    (count, group) => count + group.releases.length,
+    0,
+  );
   const hasProgress = scannedArtists > 0;
-  const scanButtonLabel = paused
-    ? "Continue scan"
-    : scanComplete
-      ? "Scan again"
-      : hasProgress
-        ? "Continue scan"
-        : "Check now";
+  const scanButtonLabel = restoringCache
+    ? "Checking cache"
+    : paused
+      ? "Continue scan"
+      : scanComplete
+        ? "Scan again"
+        : hasProgress
+          ? "Continue scan"
+          : "Check now";
   const progressKnown =
     scanComplete || (artistCount !== null && artistCount > 0);
   const progressPercent = scanComplete
@@ -1051,16 +1201,30 @@ function ReleasesView() {
     : artistCount !== null && artistCount > 0
       ? Math.min(100, Math.round((scannedArtists / artistCount) * 100))
       : 0;
-  const showProgress = loading || paused || hasProgress || scanComplete;
-  const progressStatus = scanComplete
-    ? "Complete"
+  const showProgress =
+    !restoringCache && (loading || paused || hasProgress || scanComplete);
+  const progressStatus = loading
+    ? "Scanning"
     : paused
       ? "Paused"
-      : loading
-        ? "Scanning"
-        : error
-          ? "Interrupted"
-          : "Ready to continue";
+      : error
+        ? "Interrupted"
+        : restoredFromCache
+          ? scanComplete
+            ? "Saved scan"
+            : "Saved partial scan"
+          : scanComplete
+            ? "Complete"
+            : "Ready to continue";
+  const lastCheckedLabel = formatCheckedAt(lastCheckedAt);
+  const progressSummary =
+    artistCount !== null && artistCount > 0
+      ? `${scannedArtists} of ${artistCount} artists checked`
+      : scanComplete
+        ? "No followed artists found"
+        : paused
+          ? "Continue to load your followed-artist total"
+          : "Loading your followed artists";
 
   return (
     <main className="main">
@@ -1100,8 +1264,8 @@ function ReleasesView() {
           >
             <option value="newest">Newest first</option>
             <option value="oldest">Oldest first</option>
-            <option value="artist">Artist A–Z</option>
-            <option value="title">Title A–Z</option>
+            <option value="artist">Artist A–Z within months</option>
+            <option value="title">Title A–Z within months</option>
           </select>
           {loading ? (
             <button
@@ -1115,6 +1279,7 @@ function ReleasesView() {
           ) : (
             <button
               className="secondary-button"
+              disabled={restoringCache}
               onClick={() => void scan()}
               type="button"
             >
@@ -1152,15 +1317,21 @@ function ReleasesView() {
             <i style={progressKnown ? { width: `${progressPercent}%` } : undefined} />
           </div>
           <small>
-            {artistCount !== null && artistCount > 0
-              ? `${scannedArtists} of ${artistCount} artists checked`
-              : scanComplete
-                ? "No followed artists found"
-                : paused
-                  ? "Continue to load your followed-artist total"
-                  : "Loading your followed artists"}
+            {progressSummary}
+            {lastCheckedLabel ? ` · Last checked ${lastCheckedLabel}` : ""}
+            {restoredFromCache ? " · Restored from this device" : ""}
           </small>
         </section>
+      )}
+      {restoringCache && (
+        <div className="loading-state">
+          <LoaderCircle className="spinner" size={26} />
+          <div>
+            <strong>Checking this device for a saved release scan</strong>
+            <br />
+            <small>No Spotify request is being sent.</small>
+          </div>
+        </div>
       )}
       {loading && (
         <div className="loading-state">
@@ -1173,7 +1344,7 @@ function ReleasesView() {
             </strong>
             <br />
             <small>
-              Spotify requests run in small batches and pause automatically when needed.
+              Requests run one at a time and wait whenever Spotify asks us to slow down.
             </small>
           </div>
         </div>
@@ -1182,11 +1353,11 @@ function ReleasesView() {
         <div className="error-state">
           <span>{error}</span>
           <button className="secondary-button" onClick={() => void scan()}>
-            {hasProgress ? "Continue scan" : "Try again"}
+            {scanComplete ? "Scan again" : hasProgress ? "Continue scan" : "Try again"}
           </button>
         </div>
       )}
-      {!loading && !error && !scanComplete && (
+      {!restoringCache && !loading && !error && !scanComplete && (
         <div className="empty">
           {paused ? <Pause size={28} /> : <Sparkles size={28} />}
           <strong>
@@ -1209,7 +1380,7 @@ function ReleasesView() {
           </button>
         </div>
       )}
-      {!loading && !error && scanComplete && visible.length === 0 && (
+      {!restoringCache && !loading && !error && scanComplete && visibleCount === 0 && (
         <div className="empty">
           <Music2 size={28} />
           <span>
@@ -1217,72 +1388,34 @@ function ReleasesView() {
           </span>
         </div>
       )}
-      {visible.length > 0 && (
-        <div className="release-grid">
-          {visible.map((release) => {
-            const playbackKey = `album:${release.id}`;
-            const coverUrl = preferredSpotifyImage(release.images);
+      {visibleCount > 0 && (
+        <div className="release-months">
+          {releaseGroups.map((group, index) => {
+            const headingId = `release-month-${group.key}`;
             return (
-            <article
-              className="release-card"
-              key={release.id}
-            >
-              <div className="cover-wrap">
-                {coverUrl && (
-                  <img
-                    alt=""
-                    decoding="async"
-                    loading="lazy"
-                    src={coverUrl}
-                  />
-                )}
-              </div>
-              <div className="release-actions">
-                <span className="release-badge">{release.album_type}</span>
-                <div className="release-action-buttons">
-                  <button
-                    aria-label={`Play ${release.name} in this browser`}
-                    disabled={!playback.deviceReady || Boolean(playback.pendingKey)}
-                    onClick={() =>
-                      void playback.play(
-                        { contextUri: `spotify:album:${release.id}` },
-                        playbackKey,
-                      )
-                    }
-                    title={
-                      playback.authorized
-                        ? "Play in browser"
-                        : "Reconnect Spotify to enable browser playback"
-                    }
-                    type="button"
-                  >
-                    {playback.pendingKey === playbackKey
-                      ? <LoaderCircle className="spinner" size={16} />
-                      : <Play size={16} fill="currentColor" />}
-                  </button>
-                  <a
-                    aria-label={`Open ${release.name} in Spotify`}
-                    href={release.external_urls.spotify}
-                    rel="noreferrer"
-                    target="_blank"
-                    title="Open in Spotify"
-                  >
-                    <ExternalLink size={15} />
-                  </a>
+              <section
+                aria-labelledby={headingId}
+                className="release-month"
+                key={group.key}
+              >
+                <header className="release-month-head">
+                  <div className="release-month-title">
+                    <span aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
+                    <h2 id={headingId}>{group.label}</h2>
+                  </div>
+                  <span>
+                    {group.releases.length} release
+                    {group.releases.length === 1 ? "" : "s"}
+                  </span>
+                </header>
+                <div className="release-grid">
+                  {group.releases.map((release) => (
+                    <ReleaseCard key={release.id} release={release} />
+                  ))}
                 </div>
-              </div>
-              <h3>
-                <a href={release.external_urls.spotify} rel="noreferrer" target="_blank">
-                  {release.name}
-                </a>
-              </h3>
-              <p>{release.artists.map((artist) => artist.name).join(", ")}</p>
-              <div className="release-meta">
-                <span>{formatReleaseDate(release.release_date)}</span>
-                <span>{release.total_tracks} track{release.total_tracks === 1 ? "" : "s"}</span>
-              </div>
-            </article>
-          )})}
+              </section>
+            );
+          })}
         </div>
       )}
       <p className="legal-note">
@@ -1975,14 +2108,20 @@ export function SpotifyApp() {
                 <div className="avatar-placeholder">{(user.display_name || "S")[0]}</div>
               )}
               <span className="account-name">{user.display_name || "Spotify user"}</span>
-              <a
+              <button
                 aria-label="Disconnect Spotify"
                 className="icon-button"
-                href="/api/auth/logout"
+                onClick={() => {
+                  releaseMemoryCache.delete(user.id);
+                  void clearCachedReleaseScan(user.id).finally(() => {
+                    window.location.assign("/api/auth/logout");
+                  });
+                }}
                 style={{ background: "transparent", color: "var(--muted)", padding: 6 }}
+                type="button"
               >
                 <LogOut size={15} />
-              </a>
+              </button>
             </>
           ) : (
             <CircleUserRound size={20} color="var(--dim)" />
@@ -1992,7 +2131,7 @@ export function SpotifyApp() {
       {!user
         ? <Landing authError={authError} />
         : view === "releases"
-          ? <ReleasesView />
+          ? <ReleasesView key={user.id} userId={user.id} />
           : <PlaylistsView />}
     </div>
   );

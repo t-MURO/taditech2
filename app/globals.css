@@ -534,6 +534,46 @@ details.column-config > summary > span {
   from { transform: translateX(-110%); }
   to { transform: translateX(310%); }
 }
+.release-months {
+  display: flex;
+  flex-direction: column;
+  gap: 48px;
+}
+.release-month { min-width: 0; }
+.release-month-head {
+  align-items: baseline;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  margin-bottom: 18px;
+  padding-bottom: 10px;
+}
+.release-month-title {
+  align-items: baseline;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+.release-month-title span {
+  color: var(--green);
+  font-family: var(--font-mono), monospace;
+  font-size: 9px;
+  letter-spacing: .08em;
+}
+.release-month-head h2 {
+  font-size: clamp(20px, 2.2vw, 28px);
+  letter-spacing: -.04em;
+  margin: 0;
+}
+.release-month-head > span {
+  color: var(--dim);
+  flex: 0 0 auto;
+  font-family: var(--font-mono), monospace;
+  font-size: 9px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
 .release-grid {
   display: grid;
   gap: 26px 16px;
@@ -1169,6 +1209,13 @@ details.column-config > summary > span {
   .release-badge { display: none; }
   .release-actions { justify-content: flex-end; }
   .release-card h3 { margin-top: 9px; }
+  .release-months { gap: 38px; }
+  .release-month-head {
+    align-items: flex-end;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .release-month-head h2 { font-size: 22px; }
   .playlist-panel { border-radius: 12px; }
   .playlist-panel-head {
     align-items: stretch;
