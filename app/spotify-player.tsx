@@ -29,6 +29,7 @@ import {
   playbackProgressPercent,
 } from "@/lib/playback";
 import { preferredSpotifyImage } from "@/lib/spotify-data";
+import { spotifyAppHref } from "@/lib/spotify-links";
 
 type SpotifyArtist = { name: string; uri: string };
 type SpotifyImage = { url: string; height?: number; width?: number };
@@ -490,7 +491,9 @@ export function PlaybackProvider({
   );
 
   const currentTrack = state?.track_window.current_track;
-  const currentTrackUrl = currentTrack ? spotifyWebUrl(currentTrack.uri) : "";
+  const currentTrackUrl = currentTrack
+    ? spotifyAppHref({ uri: currentTrack.uri }) ?? ""
+    : "";
   const currentTrackImage = preferredSpotifyImage(currentTrack?.album?.images);
   const elapsed = state
     ? playbackElapsed(
@@ -701,11 +704,10 @@ export function PlaybackProvider({
           </div>
           {currentTrack && currentTrackUrl && (
             <a
-              aria-label={`Open current ${spotifyItemKind(currentTrack.uri)} in Spotify`}
+              aria-label={`Open current ${spotifyItemKind(currentTrack.uri)} in the Spotify app`}
               className="player-mobile-open"
               href={currentTrackUrl}
-              rel="noreferrer"
-              target="_blank"
+              title="Open in Spotify app"
             >
               <ExternalLink size={17} />
             </a>
@@ -827,10 +829,9 @@ export function PlaybackProvider({
           )}
           {currentTrack && currentTrackUrl ? (
             <a
-              aria-label={`Open current ${spotifyItemKind(currentTrack.uri)} in Spotify`}
+              aria-label={`Open current ${spotifyItemKind(currentTrack.uri)} in the Spotify app`}
               href={currentTrackUrl}
-              rel="noreferrer"
-              target="_blank"
+              title="Open in Spotify app"
             >
               <ExternalLink size={14} />
             </a>
@@ -995,13 +996,6 @@ function isAbortError(error: unknown) {
 function spotifyItemKind(uri: string) {
   const [, kind] = uri.split(":");
   return kind === "episode" ? "episode" : "track";
-}
-
-function spotifyWebUrl(uri: string) {
-  const [, kind, id] = uri.split(":");
-  return /^(track|episode)$/.test(kind) && /^[a-zA-Z0-9]{22}$/.test(id)
-    ? `https://open.spotify.com/${kind}/${id}`
-    : "";
 }
 
 function messageFrom(error: unknown) {

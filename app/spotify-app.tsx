@@ -47,6 +47,7 @@ import {
   type ReleaseBatch,
   type ReleaseScanSnapshot,
 } from "@/lib/release-data";
+import { spotifyAppHref } from "@/lib/spotify-links";
 import { PlaybackProvider, usePlayback } from "./spotify-player";
 
 type User = {
@@ -261,16 +262,24 @@ function imageDimensions(
 
 function renderArtists(artists?: NormalizedSpotifyTrack["artists"]) {
   if (!artists?.length) return EMPTY_VALUE;
-  return artists.map((artist, index) => (
-    <span key={`${artist.id || artist.name}:${index}`}>
-      {index > 0 ? ", " : ""}
-      {artist.external_urls?.spotify ? (
-        <a href={artist.external_urls.spotify} rel="noreferrer" target="_blank">
-          {artist.name}
-        </a>
-      ) : artist.name}
-    </span>
-  ));
+  return artists.map((artist, index) => {
+    const spotifyHref = spotifyAppHref({
+      uri: artist.uri,
+      kind: "artist",
+      id: artist.id,
+      webUrl: artist.external_urls?.spotify,
+    });
+    return (
+      <span key={`${artist.id || artist.name}:${index}`}>
+        {index > 0 ? ", " : ""}
+        {spotifyHref ? (
+          <a href={spotifyHref} title="Open artist in Spotify app">
+            {artist.name}
+          </a>
+        ) : artist.name}
+      </span>
+    );
+  });
 }
 
 const TRACK_COLUMNS: TrackColumn[] = [
@@ -293,16 +302,22 @@ const TRACK_COLUMNS: TrackColumn[] = [
     required: true,
     className: "track-title",
     getSortValue: (entry) => entry.item.name.toLocaleLowerCase(),
-    render: (entry) => (
-      <>
-        {entry.item.external_urls?.spotify ? (
-          <a href={entry.item.external_urls.spotify} rel="noreferrer" target="_blank">
-            {entry.item.name}
-          </a>
-        ) : entry.item.name}
-        {entry.item.explicit && <span className="explicit">E</span>}
-      </>
-    ),
+    render: (entry) => {
+      const spotifyHref = spotifyAppHref({
+        uri: entry.item.uri,
+        webUrl: entry.item.external_urls?.spotify,
+      });
+      return (
+        <>
+          {spotifyHref ? (
+            <a href={spotifyHref} title="Open track in Spotify app">
+              {entry.item.name}
+            </a>
+          ) : entry.item.name}
+          {entry.item.explicit && <span className="explicit">E</span>}
+        </>
+      );
+    },
   },
   {
     id: "artist",
@@ -322,8 +337,14 @@ const TRACK_COLUMNS: TrackColumn[] = [
     render: (entry) => {
       const album = entry.item.album;
       if (!album) return EMPTY_VALUE;
-      return album.external_urls?.spotify ? (
-        <a href={album.external_urls.spotify} rel="noreferrer" target="_blank">
+      const spotifyHref = spotifyAppHref({
+        uri: album.uri,
+        kind: "album",
+        id: album.id,
+        webUrl: album.external_urls?.spotify,
+      });
+      return spotifyHref ? (
+        <a href={spotifyHref} title="Open album in Spotify app">
           {album.name}
         </a>
       ) : album.name;
@@ -430,8 +451,14 @@ const TRACK_COLUMNS: TrackColumn[] = [
     render: (entry) => {
       const addedBy = entry.added_by;
       if (!addedBy?.id) return EMPTY_VALUE;
-      return addedBy.external_urls?.spotify ? (
-        <a href={addedBy.external_urls.spotify} rel="noreferrer" target="_blank">
+      const spotifyHref = spotifyAppHref({
+        uri: addedBy.uri,
+        kind: "user",
+        id: addedBy.id,
+        webUrl: addedBy.external_urls?.spotify,
+      });
+      return spotifyHref ? (
+        <a href={spotifyHref} title="Open profile in Spotify app">
           {addedBy.id}
         </a>
       ) : metadataCode(addedBy.id);
@@ -895,6 +922,12 @@ function ReleaseCard({ release }: { release: Release }) {
   const playback = usePlayback();
   const playbackKey = `album:${release.id}`;
   const coverUrl = preferredSpotifyImage(release.images);
+  const spotifyHref =
+    spotifyAppHref({
+      kind: "album",
+      id: release.id,
+      webUrl: release.external_urls.spotify,
+    }) ?? release.external_urls.spotify;
 
   return (
     <article className="release-card">
@@ -927,18 +960,16 @@ function ReleaseCard({ release }: { release: Release }) {
               : <Play size={16} fill="currentColor" />}
           </button>
           <a
-            aria-label={`Open ${release.name} in Spotify`}
-            href={release.external_urls.spotify}
-            rel="noreferrer"
-            target="_blank"
-            title="Open in Spotify"
+            aria-label={`Open ${release.name} in the Spotify app`}
+            href={spotifyHref}
+            title="Open in Spotify app"
           >
             <ExternalLink size={15} />
           </a>
         </div>
       </div>
       <h3>
-        <a href={release.external_urls.spotify} rel="noreferrer" target="_blank">
+        <a href={spotifyHref} title="Open in Spotify app">
           {release.name}
         </a>
       </h3>
@@ -1881,11 +1912,16 @@ function PlaylistsView() {
                 {selected && (
                   <a
                     className="secondary-button"
-                    href={selected.external_urls.spotify}
-                    rel="noreferrer"
-                    target="_blank"
+                    href={
+                      spotifyAppHref({
+                        kind: "playlist",
+                        id: selected.id,
+                        webUrl: selected.external_urls.spotify,
+                      }) ?? selected.external_urls.spotify
+                    }
+                    title="Open playlist in Spotify app"
                   >
-                    Open Spotify <ExternalLink size={13} />
+                    Open Spotify app <ExternalLink size={13} />
                   </a>
                 )}
               </div>
@@ -1972,6 +2008,10 @@ function PlaylistsView() {
                         entry.item.is_playable !== false &&
                         /^spotify:track:[a-zA-Z0-9]{22}$/.test(entry.item.uri);
                       const playbackKey = `track:${entry.key}`;
+                      const spotifyHref = spotifyAppHref({
+                        uri: entry.item.uri,
+                        webUrl: entry.item.external_urls?.spotify,
+                      });
                       return (
                       <tr key={entry.key}>
                         {visibleColumns.map((column) => (
@@ -2008,13 +2048,11 @@ function PlaylistsView() {
                               ? <LoaderCircle className="spinner" size={13} />
                               : <Play size={13} fill="currentColor" />}
                           </button>
-                          {entry.item.external_urls?.spotify && (
+                          {spotifyHref && (
                             <a
-                              aria-label={`Open ${entry.item.name} in Spotify`}
-                              href={entry.item.external_urls.spotify}
-                              rel="noreferrer"
-                              target="_blank"
-                              title="Open in Spotify"
+                              aria-label={`Open ${entry.item.name} in the Spotify app`}
+                              href={spotifyHref}
+                              title="Open in Spotify app"
                             >
                               <ExternalLink size={13} />
                             </a>
