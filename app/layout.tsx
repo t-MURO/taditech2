@@ -29,7 +29,7 @@ export async function generateMetadata(): Promise<Metadata> {
     requestHeaders.get("x-forwarded-proto") ||
     (host.startsWith("127.0.0.1") || host.startsWith("localhost") ? "http" : "https");
   const origin = `${protocol}://${host}`;
-  const title = "Tadi Tech — Your Spotify release radar & playlist desk";
+  const title = "Tadi Tech 2.0 — Your Spotify release radar & playlist desk";
   const description =
     "Catch every new release from the artists you follow and sort your own Spotify playlists with precision.";
 
@@ -37,7 +37,7 @@ export async function generateMetadata(): Promise<Metadata> {
     metadataBase: new URL(origin),
     title: {
       default: title,
-      template: "%s · Tadi Tech",
+      template: "%s · Tadi Tech 2.0",
     },
     description,
     icons: {
@@ -48,7 +48,7 @@ export async function generateMetadata(): Promise<Metadata> {
       title,
       description,
       type: "website",
-      images: [{ url: `${origin}/og.png`, width: 1200, height: 630, alt: "Tadi Tech" }],
+      images: [{ url: `${origin}/og.png`, width: 1200, height: 630, alt: "Tadi Tech 2.0" }],
     },
     twitter: {
       card: "summary_large_image",

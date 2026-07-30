@@ -2079,7 +2079,7 @@ export function SpotifyApp() {
           type="button"
         >
           <span className="brand-mark"><Sparkles size={14} fill="currentColor" /></span>
-          Tadi Tech
+          Tadi Tech 2.0
         </button>
         {user && (
           <nav className="nav" aria-label="Main navigation">
