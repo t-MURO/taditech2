@@ -148,6 +148,11 @@ type SpotifyErrorBody = {
       };
 };
 
+type SpotifyRetryPolicy = {
+  maxRateLimitRetries?: number;
+  maxServerRetries?: number;
+};
+
 let spotifyBlockedUntil = 0;
 
 function delay(ms: number, signal?: AbortSignal) {
@@ -211,8 +216,12 @@ function retryDelayMs(response: Response, attempt: number) {
 export async function spotifyFetch(
   pathOrUrl: string,
   init: RequestInit = {},
+  retryPolicy: SpotifyRetryPolicy = {},
 ): Promise<Response> {
   const signal = init.signal ?? undefined;
+  const maxRateLimitRetries =
+    retryPolicy.maxRateLimitRetries ?? Number.POSITIVE_INFINITY;
+  const maxServerRetries = retryPolicy.maxServerRetries ?? 2;
   let rateLimitAttempts = 0;
   let serverAttempts = 0;
 
@@ -236,6 +245,7 @@ export async function spotifyFetch(
     if (response.status === 429) {
       const details = await responseErrorDetails(response);
       if (details.reason === "QUOTA_EXCEEDED") return response;
+      if (rateLimitAttempts >= maxRateLimitRetries) return response;
 
       const waitMs = retryDelayMs(response, rateLimitAttempts);
       rateLimitAttempts += 1;
@@ -247,7 +257,7 @@ export async function spotifyFetch(
       continue;
     }
 
-    if (response.status >= 500 && serverAttempts < 2) {
+    if (response.status >= 500 && serverAttempts < maxServerRetries) {
       await delay(400 * 2 ** serverAttempts, signal);
       serverAttempts += 1;
       continue;
@@ -257,8 +267,12 @@ export async function spotifyFetch(
   }
 }
 
-export async function spotifyJson<T>(pathOrUrl: string, init: RequestInit = {}) {
-  const response = await spotifyFetch(pathOrUrl, init);
+export async function spotifyJson<T>(
+  pathOrUrl: string,
+  init: RequestInit = {},
+  retryPolicy: SpotifyRetryPolicy = {},
+) {
+  const response = await spotifyFetch(pathOrUrl, init, retryPolicy);
   if (!response.ok) {
     let message = "Spotify could not complete this request.";
     let code: string | undefined;

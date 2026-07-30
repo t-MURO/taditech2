@@ -1464,6 +1464,7 @@ function PlaylistsView() {
   const [loadingLists, setLoadingLists] = useState(true);
   const [loadingItems, setLoadingItems] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveProgress, setSaveProgress] = useState(0);
   const [error, setError] = useState("");
   const [playlistQuery, setPlaylistQuery] = useState("");
   const [query, setQuery] = useState("");
@@ -1650,24 +1651,76 @@ function PlaylistsView() {
       loadedPlaylistId !== selected.id
     ) return;
     setSaving(true);
+    setSaveProgress(0);
     setError("");
     try {
       const desired = visibleItems.map((entry) => entry.originalIndex);
-      const result = await getJson<{ snapshotId: string; moves: number }>(
-        `/api/playlists/${encodeURIComponent(selected.id)}/reorder`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ order: desired, snapshotId: selected.snapshot_id }),
-        },
+      let currentOrder = Array.from(
+        { length: desired.length },
+        (_, index) => index,
       );
+      let snapshotId = selected.snapshot_id;
+      let totalMoves = 0;
+      let complete = false;
+      let batches = 0;
+
+      while (!complete) {
+        const result = await getJson<{
+          snapshotId: string;
+          moves: number;
+          currentOrder: number[];
+          settled: number;
+          total: number;
+          complete: boolean;
+          paused: boolean;
+          retryAfter?: number;
+        }>(
+          `/api/playlists/${encodeURIComponent(selected.id)}/reorder`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              order: desired,
+              currentOrder,
+              snapshotId,
+            }),
+          },
+        );
+        if (!result.complete && result.moves === 0 && !result.paused) {
+          throw new Error("Spotify could not make progress. Refresh and try again.");
+        }
+
+        currentOrder = result.currentOrder;
+        snapshotId = result.snapshotId;
+        totalMoves += result.moves;
+        complete = result.complete;
+        batches += 1;
+        setSaveProgress(
+          result.total === 0
+            ? 100
+            : Math.min(100, Math.round((result.settled / result.total) * 100)),
+        );
+
+        if (batches > desired.length + 1) {
+          throw new Error("Spotify could not finish saving this order.");
+        }
+        if (result.paused) {
+          await new Promise((resolve) =>
+            window.setTimeout(
+              resolve,
+              Math.max(1, result.retryAfter ?? 1) * 1000,
+            ),
+          );
+        }
+      }
+
       const committed = visibleItems.map((entry, position) => ({
         ...entry,
         position,
         originalIndex: position,
       }));
       setItems(committed);
-      const updatedPlaylist = { ...selected, snapshot_id: result.snapshotId };
+      const updatedPlaylist = { ...selected, snapshot_id: snapshotId };
       setSelected(updatedPlaylist);
       setPlaylists((current) =>
         current.map((playlist) =>
@@ -1677,8 +1730,8 @@ function PlaylistsView() {
       setSortKey("position");
       setDescending(false);
       setToast(
-        result.moves
-          ? `Saved ${result.moves} playlist moves to Spotify.`
+        totalMoves
+          ? `Saved ${totalMoves} playlist moves to Spotify.`
           : "Playlist was already in this order.",
       );
       window.setTimeout(() => setToast(""), 3200);
@@ -1686,6 +1739,7 @@ function PlaylistsView() {
       setError(saveError instanceof Error ? saveError.message : "Could not save the order.");
     } finally {
       setSaving(false);
+      setSaveProgress(0);
     }
   };
 
@@ -1851,7 +1905,7 @@ function PlaylistsView() {
                   type="button"
                 >
                   {saving ? <LoaderCircle className="spinner" size={14} /> : <ArrowUpDown size={14} />}
-                  {saving ? "Saving…" : "Save order"}
+                  {saving ? `Saving ${saveProgress}%…` : "Save order"}
                 </button>
               </div>
             </div>
