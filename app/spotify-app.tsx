@@ -604,6 +604,7 @@ function PlaylistsView() {
   const [loadingItems, setLoadingItems] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [playlistQuery, setPlaylistQuery] = useState("");
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("position");
   const [descending, setDescending] = useState(false);
@@ -622,6 +623,19 @@ function PlaylistsView() {
       }
     })();
   }, []);
+
+  const visiblePlaylists = useMemo(() => {
+    const needle = playlistQuery.trim().toLocaleLowerCase();
+    if (!needle) return playlists;
+    return playlists.filter((playlist) =>
+      playlist.name.toLocaleLowerCase().includes(needle),
+    );
+  }, [playlistQuery, playlists]);
+  const selectedOutsideFilter = Boolean(
+    playlistQuery.trim() &&
+    selected &&
+    !visiblePlaylists.some((playlist) => playlist.id === selected.id),
+  );
 
   const loadItems = useCallback(async (playlist: Playlist) => {
     setLoadingItems(true);
@@ -749,43 +763,81 @@ function PlaylistsView() {
         </div>
       ) : (
         <div className="playlist-layout">
-          <aside className="playlist-sidebar playlist-list" aria-label="Editable playlists">
-            {playlists.map((playlist) => {
-              const coverUrl = preferredSpotifyImage(playlist.images);
-              return (
-              <button
-                className={`playlist-row ${selected?.id === playlist.id ? "selected" : ""}`}
-                key={playlist.id}
-                onClick={() => setSelected(playlist)}
-                type="button"
-              >
-                {coverUrl ? (
-                  <img
-                    alt=""
-                    decoding="async"
-                    loading="lazy"
-                    src={coverUrl}
-                  />
-                ) : (
-                  <div className="playlist-cover-placeholder"><Music2 size={20} /></div>
-                )}
-                <div>
-                  <h3>{playlist.name}</h3>
-                  <p>
-                    {playlist.itemCount} items ·{" "}
-                    {playlist.collaborative ? "Collaborative" : playlist.public ? "Public" : "Private"}
-                  </p>
+          <aside className="playlist-sidebar" aria-label="Editable playlists">
+            <label className="playlist-search">
+              <Search size={15} color="var(--dim)" />
+              <input
+                aria-label="Search playlists"
+                onChange={(event) => setPlaylistQuery(event.target.value)}
+                placeholder={`Search ${playlists.length} playlists`}
+                type="search"
+                value={playlistQuery}
+              />
+            </label>
+            <div className="playlist-list">
+              {visiblePlaylists.length === 0 ? (
+                <div className="playlist-list-empty" role="status">
+                  No playlists match “{playlistQuery.trim()}”.
                 </div>
-                <ChevronRight size={16} color="var(--dim)" />
-              </button>
-              );
-            })}
+              ) : (
+                visiblePlaylists.map((playlist) => {
+                  const coverUrl = preferredSpotifyImage(playlist.images);
+                  return (
+                    <button
+                      aria-current={
+                        selected?.id === playlist.id ? "true" : undefined
+                      }
+                      className={`playlist-row ${
+                        selected?.id === playlist.id ? "selected" : ""
+                      }`}
+                      key={playlist.id}
+                      onClick={() => setSelected(playlist)}
+                      type="button"
+                    >
+                      {coverUrl ? (
+                        <img
+                          alt=""
+                          decoding="async"
+                          loading="lazy"
+                          src={coverUrl}
+                        />
+                      ) : (
+                        <div className="playlist-cover-placeholder">
+                          <Music2 size={20} />
+                        </div>
+                      )}
+                      <div>
+                        <h3>{playlist.name}</h3>
+                        <p>
+                          {playlist.itemCount} items ·{" "}
+                          {playlist.collaborative
+                            ? "Collaborative"
+                            : playlist.public
+                              ? "Public"
+                              : "Private"}
+                        </p>
+                      </div>
+                      <ChevronRight size={16} color="var(--dim)" />
+                    </button>
+                  );
+                })
+              )}
+            </div>
           </aside>
           <section className="playlist-panel">
             <div className="playlist-panel-head">
               <div>
                 <h2>{selected?.name}</h2>
                 <p>{items.length} loaded items · sort by any column</p>
+                {selectedOutsideFilter && (
+                  <button
+                    className="playlist-filter-reset"
+                    onClick={() => setPlaylistQuery("")}
+                    type="button"
+                  >
+                    Active playlist is hidden by the search — show it
+                  </button>
+                )}
               </div>
               <div className="panel-actions">
                 {selected && (

@@ -4,7 +4,7 @@ A modern Spotify companion for:
 
 - finding the newest albums, EPs, and singles from every followed artist
 - opening content in Spotify or playing it directly in the browser
-- viewing playlists you own or collaborate on
+- searching and viewing playlists you own or collaborate on
 - sorting full playlist contents by track metadata
 - persisting the visible order back to Spotify
 
