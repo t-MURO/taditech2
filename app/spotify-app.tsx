@@ -83,7 +83,7 @@ type SortKey =
 
 type ReleaseScanSnapshot = {
   releases: Release[];
-  artistCount: number;
+  artistCount: number | null;
   scannedArtists: number;
   nextCursor: string | null;
   complete: boolean;
@@ -92,7 +92,7 @@ type ReleaseScanSnapshot = {
 
 type ReleaseBatch = {
   releases: Release[];
-  artistCount: number;
+  artistCount: number | null;
   scannedArtists: number;
   nextCursor: string | null;
   complete: boolean;
@@ -196,7 +196,9 @@ function Landing({ authError }: { authError: string }) {
 function ReleasesView() {
   const playback = usePlayback();
   const [releases, setReleases] = useState<Release[]>(() => releaseMemoryCache?.releases || []);
-  const [artistCount, setArtistCount] = useState(() => releaseMemoryCache?.artistCount || 0);
+  const [artistCount, setArtistCount] = useState<number | null>(
+    () => releaseMemoryCache?.artistCount ?? null,
+  );
   const [scannedArtists, setScannedArtists] = useState(
     () => releaseMemoryCache?.scannedArtists || 0,
   );
@@ -227,12 +229,12 @@ function ReleasesView() {
     );
     let cursor = resumable?.nextCursor ?? null;
     let scanned = resumable?.scannedArtists ?? 0;
-    let total = resumable?.artistCount ?? 0;
+    let total = resumable?.artistCount ?? null;
 
     if (!resumable) {
       releaseMemoryCache = undefined;
       setReleases([]);
-      setArtistCount(0);
+      setArtistCount(null);
       setScannedArtists(0);
       setScanComplete(false);
     } else {
@@ -261,12 +263,15 @@ function ReleasesView() {
 
         for (const release of data.releases) merged.set(release.id, release);
         scanned += data.scannedArtists;
-        total = Math.max(total, data.artistCount, scanned);
+        if (data.artistCount !== null) {
+          total = Math.max(total ?? 0, data.artistCount, scanned);
+        }
 
         const sorted = Array.from(merged.values()).sort((a, b) =>
           b.release_date.localeCompare(a.release_date),
         );
         const nextCursor = data.complete ? null : data.nextCursor;
+        if (!nextCursor && total === null) total = scanned;
         if (nextCursor && nextCursor === cursor) {
           throw new Error("Spotify returned the same artist page twice. Continue the scan later.");
         }
@@ -342,6 +347,23 @@ function ReleasesView() {
       : hasProgress
         ? "Continue scan"
         : "Check now";
+  const progressKnown =
+    scanComplete || (artistCount !== null && artistCount > 0);
+  const progressPercent = scanComplete
+    ? 100
+    : artistCount !== null && artistCount > 0
+      ? Math.min(100, Math.round((scannedArtists / artistCount) * 100))
+      : 0;
+  const showProgress = loading || paused || hasProgress || scanComplete;
+  const progressStatus = scanComplete
+    ? "Complete"
+    : paused
+      ? "Paused"
+      : loading
+        ? "Scanning"
+        : error
+          ? "Interrupted"
+          : "Ready to continue";
 
   return (
     <main className="main">
@@ -353,9 +375,9 @@ function ReleasesView() {
         <div className="stats">
           <div className="stat">
             <strong>
-              {hasProgress && !scanComplete && artistCount
+              {hasProgress && !scanComplete && artistCount !== null
                 ? `${scannedArtists}/${artistCount}`
-                : artistCount || "—"}
+                : artistCount ?? "—"}
             </strong>
             <span>{scanComplete ? "artists scanned" : "artists"}</span>
           </div>
@@ -405,6 +427,44 @@ function ReleasesView() {
           )}
         </div>
       </div>
+      {showProgress && (
+        <section className="scan-progress" aria-label="Release scan progress">
+          <div className="scan-progress-head">
+            <span>{progressStatus}</span>
+            <strong>{progressKnown ? `${progressPercent}%` : "Starting…"}</strong>
+          </div>
+          <div
+            aria-valuemax={100}
+            aria-valuemin={0}
+            aria-valuenow={progressKnown ? progressPercent : undefined}
+            aria-valuetext={
+              progressKnown
+                ? `${progressPercent}% complete`
+                : paused
+                  ? "Scan paused before the artist total was loaded"
+                  : error
+                    ? `${scannedArtists} artists checked; total unavailable`
+                    : "Loading followed artists"
+            }
+            aria-label="Release scan progress"
+            className={`scan-progress-track ${
+              !progressKnown ? "unknown" : ""
+            } ${loading && !progressKnown ? "indeterminate" : ""}`}
+            role="progressbar"
+          >
+            <i style={progressKnown ? { width: `${progressPercent}%` } : undefined} />
+          </div>
+          <small>
+            {artistCount !== null && artistCount > 0
+              ? `${scannedArtists} of ${artistCount} artists checked`
+              : scanComplete
+                ? "No followed artists found"
+                : paused
+                  ? "Continue to load your followed-artist total"
+                  : "Loading your followed artists"}
+          </small>
+        </section>
+      )}
       {loading && (
         <div className="loading-state">
           <LoaderCircle className="spinner" size={26} />

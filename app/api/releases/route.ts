@@ -71,7 +71,12 @@ export async function GET(request: Request) {
 
     return Response.json({
       releases: unique,
-      artistCount: Math.max(page.artists.total ?? 0, artists.length),
+      artistCount:
+        typeof page.artists.total === "number" &&
+        Number.isFinite(page.artists.total) &&
+        page.artists.total >= 0
+          ? page.artists.total
+          : null,
       scannedArtists: artists.length,
       nextCursor,
       complete: !nextCursor,

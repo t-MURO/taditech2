@@ -320,6 +320,59 @@ select:focus-visible {
   font-size: 12px;
   padding: 10px 34px 10px 14px;
 }
+.scan-progress {
+  background: linear-gradient(135deg, rgba(183,247,47,.055), rgba(255,255,255,.018));
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  margin: -12px 0 28px;
+  padding: 14px 16px;
+}
+.scan-progress-head {
+  align-items: baseline;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 9px;
+}
+.scan-progress-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.scan-progress-head strong {
+  color: var(--green);
+  font-family: var(--font-mono), monospace;
+  font-size: 15px;
+}
+.scan-progress-track {
+  background: rgba(255,255,255,.075);
+  border-radius: 999px;
+  height: 7px;
+  overflow: hidden;
+}
+.scan-progress-track i {
+  background: linear-gradient(90deg, var(--green), #dcff8b);
+  border-radius: inherit;
+  box-shadow: 0 0 16px rgba(183,247,47,.24);
+  display: block;
+  height: 100%;
+  transition: width 280ms ease;
+}
+.scan-progress-track.unknown i { width: 34%; }
+.scan-progress-track.indeterminate i {
+  animation: scan-progress 1.25s ease-in-out infinite;
+}
+.scan-progress small {
+  color: var(--dim);
+  display: block;
+  font-size: 10px;
+  margin-top: 8px;
+}
+@keyframes scan-progress {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(310%); }
+}
 .release-grid {
   display: grid;
   gap: 26px 16px;
@@ -980,4 +1033,5 @@ select:focus-visible {
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
+  .scan-progress-track.indeterminate i { animation: none; transform: none; width: 34%; }
 }
