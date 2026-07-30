@@ -20,6 +20,14 @@ import {
   useRef,
   useState,
 } from "react";
+import {
+  clampPlaybackPosition,
+  displayedPlaybackPosition,
+  formatPlaybackTime,
+  isSeekKey,
+  playbackElapsed,
+  playbackProgressPercent,
+} from "@/lib/playback";
 import { preferredSpotifyImage } from "@/lib/spotify-data";
 
 type SpotifyArtist = { name: string; uri: string };
@@ -41,6 +49,7 @@ type SpotifyState = {
   paused: boolean;
   position: number;
   duration: number;
+  disallows?: { seeking?: boolean };
   track_window: { current_track: SpotifyTrack };
 };
 type SpotifyPlayer = {
@@ -50,6 +59,7 @@ type SpotifyPlayer = {
   disconnect(): void;
   nextTrack(): Promise<void>;
   previousTrack(): Promise<void>;
+  seek(positionMs: number): Promise<void>;
   togglePlay(): Promise<void>;
 };
 type SpotifyNamespace = {
@@ -115,15 +125,29 @@ export function PlaybackProvider({
   const [retryAvailable, setRetryAvailable] = useState(false);
   const [retryNonce, setRetryNonce] = useState(0);
   const [state, setState] = useState<SpotifyState | null>(null);
+  const stateRef = useRef<SpotifyState | null>(null);
   const [observedAt, setObservedAt] = useState(0);
   const [clock, setClock] = useState(0);
   const [error, setError] = useState("");
   const [pendingKey, setPendingKey] = useState("");
+  const [seekDraft, setSeekDraft] = useState<number | null>(null);
   const pendingCommandRef = useRef("");
   const commandAcceptedRef = useRef(false);
   const commandAbortRef = useRef<AbortController | null>(null);
   const pendingTimeoutRef = useRef<number | null>(null);
   const transientTokenFailureRef = useRef(false);
+  const seekDraftRef = useRef<number | null>(null);
+  const seekTrackUriRef = useRef("");
+  const currentTrackUriRef = useRef("");
+  const seekPointerActiveRef = useRef(false);
+  const seekKeyboardActiveRef = useRef(false);
+  const seekCommitTimeoutRef = useRef<number | null>(null);
+  const committedSeekRef = useRef<{
+    trackUri: string;
+    target: number;
+    committedAt: number;
+    expiresAt: number;
+  } | null>(null);
 
   const setActiveDeviceId = useCallback((nextDeviceId: string) => {
     deviceIdRef.current = nextDeviceId;
@@ -142,6 +166,25 @@ export function PlaybackProvider({
     setPendingKey("");
   }, []);
 
+  const clearSeekDraft = useCallback(() => {
+    if (seekCommitTimeoutRef.current !== null) {
+      window.clearTimeout(seekCommitTimeoutRef.current);
+      seekCommitTimeoutRef.current = null;
+    }
+    seekPointerActiveRef.current = false;
+    seekKeyboardActiveRef.current = false;
+    seekDraftRef.current = null;
+    seekTrackUriRef.current = "";
+    setSeekDraft(null);
+  }, []);
+
+  const resetSeekState = useCallback(() => {
+    stateRef.current = null;
+    currentTrackUriRef.current = "";
+    committedSeekRef.current = null;
+    clearSeekDraft();
+  }, [clearSeekDraft]);
+
   useEffect(() => {
     if (!authorized) {
       setConnecting(false);
@@ -150,6 +193,7 @@ export function PlaybackProvider({
       setState(null);
       setRetryAvailable(false);
       clearPending();
+      resetSeekState();
       return;
     }
 
@@ -159,6 +203,7 @@ export function PlaybackProvider({
     setReconnectRequired(false);
     setRetryAvailable(false);
     transientTokenFailureRef.current = false;
+    resetSeekState();
     setError("");
 
     void (async () => {
@@ -188,6 +233,7 @@ export function PlaybackProvider({
                 setReconnectRequired(reconnect);
                 setRetryAvailable(!reconnect);
                 clearPending();
+                resetSeekState();
                 setError(messageFrom(tokenError));
               });
           },
@@ -212,6 +258,7 @@ export function PlaybackProvider({
           setConnecting(true);
           setRetryAvailable(true);
           clearPending();
+          resetSeekState();
           setError("The browser player went offline. Waiting for Spotify to reconnect.");
         }) as (payload: never) => void);
         localPlayer.addListener("player_state_changed", ((nextState: SpotifyState | null) => {
@@ -221,10 +268,37 @@ export function PlaybackProvider({
             setObservedAt(0);
             setClock(0);
             clearPending();
+            resetSeekState();
             return;
           }
-          setState(nextState);
           const now = Date.now();
+          const nextTrackUri = nextState.track_window.current_track.uri;
+          if (nextTrackUri !== currentTrackUriRef.current) {
+            currentTrackUriRef.current = nextTrackUri;
+            committedSeekRef.current = null;
+            clearSeekDraft();
+          }
+          const committedSeek = committedSeekRef.current;
+          const expectedCommittedPosition = committedSeek
+            ? clampPlaybackPosition(
+                committedSeek.target +
+                  (nextState.paused ? 0 : now - committedSeek.committedAt),
+                nextState.duration,
+              )
+            : nextState.position;
+          const keepCommittedPosition =
+            committedSeek !== null &&
+            committedSeek.trackUri === nextTrackUri &&
+            committedSeek.expiresAt > now &&
+            Math.abs(nextState.position - expectedCommittedPosition) > 3_000;
+          if (committedSeek && !keepCommittedPosition) {
+            committedSeekRef.current = null;
+          }
+          const observedState = keepCommittedPosition
+            ? { ...nextState, position: expectedCommittedPosition }
+            : nextState;
+          stateRef.current = observedState;
+          setState(observedState);
           setObservedAt(now);
           setClock(now);
           if (commandAcceptedRef.current) clearPending();
@@ -236,6 +310,7 @@ export function PlaybackProvider({
           setConnecting(false);
           setRetryAvailable(true);
           clearPending();
+          resetSeekState();
           setError(
             payload.message ||
               "This browser could not initialize Spotify’s protected audio player.",
@@ -250,6 +325,7 @@ export function PlaybackProvider({
           setReconnectRequired(!transientFailure);
           setRetryAvailable(transientFailure);
           clearPending();
+          resetSeekState();
           setError(
             transientFailure
               ? "Spotify playback authorization is temporarily unavailable. Try the player again."
@@ -263,6 +339,7 @@ export function PlaybackProvider({
           setConnecting(false);
           setRetryAvailable(true);
           clearPending();
+          resetSeekState();
           setError("Browser playback requires an active Spotify Premium account.");
         }) as (payload: never) => void);
         localPlayer.addListener("playback_error", ((payload: { message: string }) => {
@@ -281,6 +358,7 @@ export function PlaybackProvider({
           setActiveDeviceId("");
           setConnecting(false);
           setRetryAvailable(true);
+          resetSeekState();
           setError("Spotify could not connect the browser player.");
         }
       } catch (setupError) {
@@ -288,6 +366,7 @@ export function PlaybackProvider({
         setActiveDeviceId("");
         setConnecting(false);
         setRetryAvailable(true);
+        resetSeekState();
         setError(messageFrom(setupError));
       }
     })();
@@ -295,10 +374,18 @@ export function PlaybackProvider({
     return () => {
       cancelled = true;
       clearPending();
+      resetSeekState();
       localPlayer?.disconnect();
       if (playerRef.current === localPlayer) playerRef.current = null;
     };
-  }, [authorized, clearPending, retryNonce, setActiveDeviceId]);
+  }, [
+    authorized,
+    clearPending,
+    clearSeekDraft,
+    resetSeekState,
+    retryNonce,
+    setActiveDeviceId,
+  ]);
 
   useEffect(() => {
     if (!state || state.paused) return;
@@ -318,7 +405,7 @@ export function PlaybackProvider({
         setError("The browser player is still connecting. Try again in a moment.");
         return;
       }
-      if (pendingCommandRef.current) return;
+      if (pendingCommandRef.current || seekDraftRef.current !== null) return;
 
       const commandController = new AbortController();
       commandAbortRef.current = commandController;
@@ -358,6 +445,7 @@ export function PlaybackProvider({
           setConnecting(false);
           setReconnectRequired(true);
           setRetryAvailable(false);
+          resetSeekState();
         }
         setError(
           isAbortError(playError)
@@ -371,7 +459,14 @@ export function PlaybackProvider({
         }
       }
     },
-    [authorized, clearPending, deviceId, reconnectRequired, setActiveDeviceId],
+    [
+      authorized,
+      clearPending,
+      deviceId,
+      reconnectRequired,
+      resetSeekState,
+      setActiveDeviceId,
+    ],
   );
 
   const deviceReady =
@@ -380,25 +475,166 @@ export function PlaybackProvider({
     () => ({
       authorized: authorized && !reconnectRequired,
       deviceReady,
-      pendingKey,
+      pendingKey:
+        pendingKey || (seekDraft !== null ? "control:seek-draft" : ""),
       play,
     }),
-    [authorized, deviceReady, pendingKey, play, reconnectRequired],
+    [
+      authorized,
+      deviceReady,
+      pendingKey,
+      play,
+      reconnectRequired,
+      seekDraft,
+    ],
   );
 
   const currentTrack = state?.track_window.current_track;
   const currentTrackUrl = currentTrack ? spotifyWebUrl(currentTrack.uri) : "";
   const currentTrackImage = preferredSpotifyImage(currentTrack?.album?.images);
   const elapsed = state
-    ? Math.min(
+    ? playbackElapsed(
+        state.position,
         state.duration,
-        state.position + (state.paused ? 0 : Math.max(0, clock - observedAt)),
+        state.paused,
+        observedAt,
+        clock,
       )
     : 0;
 
+  const runSeek = async (position: number, trackUri: string) => {
+    const player = playerRef.current;
+    const currentState = stateRef.current;
+    if (
+      !player ||
+      !deviceReady ||
+      !currentState ||
+      !Number.isFinite(currentState.duration) ||
+      currentState.duration <= 0 ||
+      currentState.disallows?.seeking ||
+      pendingCommandRef.current ||
+      currentState.track_window.current_track.uri !== trackUri
+    ) {
+      clearSeekDraft();
+      return;
+    }
+
+    const target = clampPlaybackPosition(position, currentState.duration);
+    const commandKey = "control:seek";
+    const commandController = new AbortController();
+    commandAbortRef.current = commandController;
+    const commandTimeout = window.setTimeout(
+      () => commandController.abort(),
+      10_000,
+    );
+    pendingCommandRef.current = commandKey;
+    commandAcceptedRef.current = false;
+    setPendingKey(commandKey);
+    setError("");
+
+    try {
+      await abortable(player.activateElement(), commandController.signal);
+      if (currentTrackUriRef.current !== trackUri) return;
+      await abortable(player.seek(target), commandController.signal);
+      if (currentTrackUriRef.current !== trackUri) return;
+
+      const now = Date.now();
+      committedSeekRef.current = {
+        trackUri,
+        target,
+        committedAt: now,
+        expiresAt: now + 5_000,
+      };
+      setState((current) => {
+        const nextState =
+          current?.track_window.current_track.uri === trackUri
+            ? { ...current, position: target }
+            : current;
+        stateRef.current = nextState;
+        return nextState;
+      });
+      setObservedAt(now);
+      setClock(now);
+    } catch (seekError) {
+      setError(
+        isAbortError(seekError)
+          ? "Spotify took too long to seek. Try again."
+          : messageFrom(seekError),
+      );
+    } finally {
+      window.clearTimeout(commandTimeout);
+      clearSeekDraft();
+      if (pendingCommandRef.current === commandKey) {
+        clearPending();
+      }
+      if (commandAbortRef.current === commandController) {
+        commandAbortRef.current = null;
+      }
+    }
+  };
+
+  const commitSeekDraft = () => {
+    if (seekCommitTimeoutRef.current !== null) {
+      window.clearTimeout(seekCommitTimeoutRef.current);
+      seekCommitTimeoutRef.current = null;
+    }
+    seekPointerActiveRef.current = false;
+    seekKeyboardActiveRef.current = false;
+    const draft = seekDraftRef.current;
+    const trackUri = seekTrackUriRef.current;
+    if (draft === null || !trackUri) {
+      clearSeekDraft();
+      return;
+    }
+    void runSeek(draft, trackUri);
+  };
+
+  const updateSeekDraft = (position: number) => {
+    if (!state || !currentTrack) return;
+    const nextPosition = clampPlaybackPosition(position, state.duration);
+    seekDraftRef.current = nextPosition;
+    seekTrackUriRef.current = currentTrack.uri;
+    setSeekDraft(nextPosition);
+
+    if (
+      !seekPointerActiveRef.current &&
+      !seekKeyboardActiveRef.current
+    ) {
+      if (seekCommitTimeoutRef.current !== null) {
+        window.clearTimeout(seekCommitTimeoutRef.current);
+      }
+      seekCommitTimeoutRef.current = window.setTimeout(commitSeekDraft, 250);
+    }
+  };
+
+  const playbackDuration =
+    state && Number.isFinite(state.duration)
+      ? Math.max(0, Math.round(state.duration))
+      : 0;
+  const displayedElapsed = state
+    ? displayedPlaybackPosition(elapsed, seekDraft, playbackDuration)
+    : 0;
+  const seekProgress = state
+    ? playbackProgressPercent(displayedElapsed, playbackDuration)
+    : 0;
+  const seekDisabled =
+    !deviceReady ||
+    !currentTrack ||
+    !state ||
+    playbackDuration <= 0 ||
+    Boolean(state.disallows?.seeking) ||
+    Boolean(pendingKey);
+
   const runControl = async (control: "previous" | "toggle" | "next") => {
     const player = playerRef.current;
-    if (!player || !deviceReady || pendingCommandRef.current) return;
+    if (
+      !player ||
+      !deviceReady ||
+      pendingCommandRef.current ||
+      seekDraftRef.current !== null
+    ) {
+      return;
+    }
     const commandKey = `control:${control}`;
     const commandController = new AbortController();
     commandAbortRef.current = commandController;
@@ -492,7 +728,12 @@ export function PlaybackProvider({
           <div className="player-controls">
             <button
               aria-label="Previous track"
-              disabled={!deviceReady || !currentTrack || Boolean(pendingKey)}
+              disabled={
+                !deviceReady ||
+                !currentTrack ||
+                Boolean(pendingKey) ||
+                seekDraft !== null
+              }
               onClick={() => void runControl("previous")}
               type="button"
             >
@@ -501,7 +742,12 @@ export function PlaybackProvider({
             <button
               aria-label={state?.paused ? "Play" : "Pause"}
               className="player-toggle"
-              disabled={!deviceReady || !currentTrack || Boolean(pendingKey)}
+              disabled={
+                !deviceReady ||
+                !currentTrack ||
+                Boolean(pendingKey) ||
+                seekDraft !== null
+              }
               onClick={() => void runControl("toggle")}
               type="button"
             >
@@ -513,7 +759,12 @@ export function PlaybackProvider({
             </button>
             <button
               aria-label="Next track"
-              disabled={!deviceReady || !currentTrack || Boolean(pendingKey)}
+              disabled={
+                !deviceReady ||
+                !currentTrack ||
+                Boolean(pendingKey) ||
+                seekDraft !== null
+              }
               onClick={() => void runControl("next")}
               type="button"
             >
@@ -522,14 +773,56 @@ export function PlaybackProvider({
           </div>
         )}
 
-        <div className="player-status">
+        <div className={`player-status ${currentTrack && state ? "has-progress" : ""}`}>
           {currentTrack && state && (
-            <div className="player-progress" aria-label="Playback progress">
-              <span>{formatTime(elapsed)}</span>
-              <div>
-                <i style={{ width: `${(elapsed / Math.max(state.duration, 1)) * 100}%` }} />
+            <div className="player-progress">
+              <span aria-hidden="true">{formatPlaybackTime(displayedElapsed)}</span>
+              <div className={`player-seek ${seekDisabled ? "disabled" : ""}`}>
+                <div aria-hidden="true" className="player-seek-rail">
+                  <i style={{ width: `${seekProgress}%` }} />
+                </div>
+                <input
+                  aria-label="Seek playback position"
+                  aria-valuetext={`${formatPlaybackTime(displayedElapsed)} of ${formatPlaybackTime(playbackDuration)}`}
+                  disabled={seekDisabled}
+                  max={playbackDuration}
+                  min={0}
+                  onBlur={() => {
+                    if (seekDraftRef.current !== null) commitSeekDraft();
+                  }}
+                  onChange={(event) =>
+                    updateSeekDraft(Number(event.currentTarget.value))
+                  }
+                  onKeyUp={(event) => {
+                    if (isSeekKey(event.key)) {
+                      seekKeyboardActiveRef.current = false;
+                      commitSeekDraft();
+                    }
+                  }}
+                  onPointerCancel={clearSeekDraft}
+                  onKeyDown={(event) => {
+                    if (!isSeekKey(event.key)) return;
+                    seekKeyboardActiveRef.current = true;
+                    if (seekCommitTimeoutRef.current !== null) {
+                      window.clearTimeout(seekCommitTimeoutRef.current);
+                      seekCommitTimeoutRef.current = null;
+                    }
+                  }}
+                  onPointerDown={(event) => {
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    seekPointerActiveRef.current = true;
+                    if (seekCommitTimeoutRef.current !== null) {
+                      window.clearTimeout(seekCommitTimeoutRef.current);
+                      seekCommitTimeoutRef.current = null;
+                    }
+                  }}
+                  onPointerUp={commitSeekDraft}
+                  step={1_000}
+                  type="range"
+                  value={displayedElapsed}
+                />
               </div>
-              <span>{formatTime(state.duration)}</span>
+              <span aria-hidden="true">{formatPlaybackTime(playbackDuration)}</span>
             </div>
           )}
           {currentTrack && currentTrackUrl ? (
@@ -713,10 +1006,4 @@ function spotifyWebUrl(uri: string) {
 
 function messageFrom(error: unknown) {
   return error instanceof Error ? error.message : "Spotify playback is unavailable.";
-}
-
-function formatTime(ms: number) {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  return `${minutes}:${String(totalSeconds % 60).padStart(2, "0")}`;
 }
