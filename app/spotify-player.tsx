@@ -119,7 +119,7 @@ export function PlaybackProvider({
   children: ReactNode;
 }) {
   const playerRef = useRef<SpotifyPlayer | null>(null);
-  const [playerEnabled, setPlayerEnabled] = useState(false);
+  const [playerEnabled, setPlayerEnabled] = useState(authorized);
   const [deviceId, setDeviceId] = useState("");
   const deviceIdRef = useRef("");
   const [connecting, setConnecting] = useState(false);
