@@ -590,13 +590,55 @@ details.column-config > summary > span {
   padding: 2px 0 12px;
   text-align: center;
 }
-.release-card { min-width: 0; }
+.release-card {
+  cursor: default;
+  min-width: 0;
+}
 .cover-wrap {
   aspect-ratio: 1;
   background: var(--panel);
   border-radius: 4px;
   overflow: hidden;
   position: relative;
+}
+.release-card.selected .cover-wrap {
+  box-shadow:
+    0 0 0 2px var(--green),
+    0 0 0 6px rgba(183,247,47,.11);
+}
+.release-selector {
+  cursor: pointer;
+  left: 9px;
+  position: absolute;
+  top: 9px;
+  z-index: 2;
+}
+.release-selector input {
+  height: 1px;
+  opacity: 0;
+  position: absolute;
+  width: 1px;
+}
+.release-selector span {
+  align-items: center;
+  background: rgba(10,13,11,.88);
+  border: 1px solid rgba(255,255,255,.42);
+  border-radius: 7px;
+  color: var(--night);
+  display: flex;
+  height: 28px;
+  justify-content: center;
+  transition: background 150ms ease, border-color 150ms ease, transform 150ms ease;
+  width: 28px;
+}
+.release-selector:hover span { transform: scale(1.05); }
+.release-selector input:focus-visible + span {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.release-selector input:checked + span {
+  background: var(--green);
+  border-color: var(--green);
 }
 .cover-wrap img { height: 100%; object-fit: cover; transition: transform 300ms ease; width: 100%; }
 .release-card:hover .cover-wrap img { transform: scale(1.025); }
@@ -1061,6 +1103,65 @@ details.column-config > summary > span {
   letter-spacing: .09em;
   text-transform: uppercase;
 }
+.release-selection-bar {
+  align-items: center;
+  background: rgba(16,19,17,.94);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  display: grid;
+  gap: 14px 20px;
+  grid-template-columns: minmax(190px, 1fr) auto;
+  margin: -8px 0 28px;
+  padding: 12px 14px;
+  position: sticky;
+  top: 76px;
+  z-index: 22;
+}
+.release-selection-bar.has-selection {
+  border-color: rgba(183,247,47,.34);
+  box-shadow: 0 14px 38px rgba(0,0,0,.3);
+}
+.release-selection-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.release-selection-copy strong {
+  font-size: 12px;
+  letter-spacing: -.01em;
+}
+.release-selection-copy span {
+  color: var(--dim);
+  font-size: 10px;
+}
+.release-selection-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  justify-content: flex-end;
+}
+.release-selection-actions .primary-button,
+.release-selection-actions .secondary-button {
+  min-height: 36px;
+  padding-bottom: 8px;
+  padding-top: 8px;
+}
+.release-selection-error {
+  color: #ffb0b0;
+  font-size: 10px;
+  grid-column: 1 / -1;
+  line-height: 1.45;
+  margin: -4px 0 0;
+}
+.release-playlist-loading {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 11px;
+  gap: 9px;
+  min-height: 44px;
+}
 .track-action-dialog-head h2 {
   font-size: 20px;
   letter-spacing: -.025em;
@@ -1133,6 +1234,63 @@ details.column-config > summary > span {
   line-height: 1.45;
   margin: 0;
   padding: 10px 12px;
+}
+.song-context-menu {
+  background: var(--panel);
+  border: 1px solid rgba(255,255,255,.16);
+  border-radius: 12px;
+  box-shadow: 0 22px 65px rgba(0,0,0,.62);
+  overflow: hidden;
+  padding: 6px;
+  position: fixed;
+  width: 224px;
+  z-index: 75;
+}
+.song-context-heading {
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 3px;
+  margin: 0 4px 5px;
+  padding: 8px 7px 10px;
+}
+.song-context-heading strong,
+.song-context-heading span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.song-context-heading strong { font-size: 12px; }
+.song-context-heading span { color: var(--dim); font-size: 10px; }
+.song-context-menu > button,
+.song-context-menu > a {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: var(--ink);
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  font-size: 11px;
+  gap: 10px;
+  min-height: 38px;
+  padding: 8px 10px;
+  text-align: left;
+  text-decoration: none;
+  width: 100%;
+}
+.song-context-menu > button:hover,
+.song-context-menu > a:hover {
+  background: rgba(255,255,255,.07);
+}
+.song-context-menu > button:disabled {
+  cursor: not-allowed;
+  opacity: .34;
+}
+.song-context-menu > button svg,
+.song-context-menu > a svg {
+  color: var(--green);
+  flex: 0 0 auto;
 }
 .legal-note { color: var(--dim); font-size: 10px; line-height: 1.5; margin-top: 20px; }
 
@@ -1520,6 +1678,11 @@ details.column-config > summary > span {
   .icon-button { height: 44px; width: 44px; }
   .account-name { display: none; }
   .release-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .release-selection-bar {
+    grid-template-columns: 1fr;
+    top: calc(64px + env(safe-area-inset-top));
+  }
+  .release-selection-actions { justify-content: flex-start; }
   .primary-button,
   .secondary-button { min-height: 44px; }
   .release-action-buttons button,
@@ -1675,6 +1838,21 @@ details.column-config > summary > span {
   .release-badge { display: none; }
   .release-actions { justify-content: flex-end; }
   .release-card h3 { margin-top: 9px; }
+  .release-selection-bar {
+    margin-bottom: 22px;
+    padding: 12px;
+  }
+  .release-selection-copy span { line-height: 1.4; }
+  .release-selection-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+  .release-selection-actions .primary-button,
+  .release-selection-actions .secondary-button {
+    justify-content: center;
+    width: 100%;
+  }
   .release-months { gap: 38px; }
   .release-month-head {
     align-items: flex-end;

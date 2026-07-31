@@ -21,7 +21,7 @@ type SpotifyItem = {
   track?: unknown;
 };
 type ItemPage = { items?: Array<SpotifyItem | null> | null; next?: unknown };
-type AddItemBody = { uri?: string };
+type AddItemBody = { uri?: unknown; uris?: unknown };
 type AddItemResponse = { snapshot_id?: unknown };
 
 type NormalizedPlaylistItem = {
@@ -127,9 +127,22 @@ export async function POST(
         { status: 400 },
       );
     }
-    if (!body.uri || !TRACK_URI.test(body.uri)) {
+    const hasSingleUri = typeof body.uri === "string";
+    const hasUriList = Array.isArray(body.uris);
+    if (hasSingleUri === hasUriList) {
       return Response.json(
-        { error: "This Spotify track is invalid." },
+        { error: "Choose either one track or a list of tracks." },
+        { status: 400 },
+      );
+    }
+    const uris = hasSingleUri ? [body.uri as string] : body.uris as unknown[];
+    if (
+      uris.length === 0 ||
+      uris.length > 100 ||
+      uris.some((uri) => typeof uri !== "string" || !TRACK_URI.test(uri))
+    ) {
+      return Response.json(
+        { error: "One or more Spotify tracks are invalid." },
         { status: 400 },
       );
     }
@@ -138,7 +151,7 @@ export async function POST(
       `/playlists/${encodeURIComponent(id)}/items`,
       {
         method: "POST",
-        body: JSON.stringify({ uris: [body.uri] }),
+        body: JSON.stringify({ uris }),
         signal: request.signal,
       },
     );
@@ -149,7 +162,10 @@ export async function POST(
         502,
       );
     }
-    return Response.json({ snapshotId }, { status: 201 });
+    return Response.json(
+      { snapshotId, added: uris.length },
+      { status: 201 },
+    );
   } catch (error) {
     return apiError(error);
   }

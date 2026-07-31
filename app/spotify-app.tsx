@@ -82,6 +82,16 @@ type PlaylistItem = {
   is_local: boolean;
   item: NormalizedSpotifyTrack;
 };
+type ReleaseSelectionTrack = {
+  id: string;
+  uri: string;
+  name: string;
+  artists: Array<{ id?: string; name: string }>;
+  albumId: string;
+  albumUri: string;
+  discNumber?: number;
+  trackNumber?: number;
+};
 type ColumnId =
   | "position"
   | "track"
@@ -161,6 +171,8 @@ const EMPTY_VALUE = "\u2014";
 const COLUMN_STORAGE_KEY = "taditech-playlist-columns-v1";
 const INITIAL_RELEASE_RENDER_LIMIT = 96;
 const RELEASE_RENDER_BATCH_SIZE = 96;
+const MAX_RELEASE_SELECTION = 20;
+const PLAYLIST_ADD_CHUNK_SIZE = 100;
 
 function freshReleaseSnapshot(snapshot?: ReleaseScanSnapshot) {
   return snapshot && releaseCacheIsFresh([snapshot], snapshot.complete)
@@ -930,7 +942,15 @@ function Landing({ authError }: { authError: string }) {
   );
 }
 
-function ReleaseCard({ release }: { release: Release }) {
+function ReleaseCard({
+  release,
+  selected,
+  onToggle,
+}: {
+  release: Release;
+  selected: boolean;
+  onToggle: () => void;
+}) {
   const playback = usePlayback();
   const playbackKey = `album:${release.id}`;
   const coverUrl = preferredSpotifyImage(release.images);
@@ -942,11 +962,33 @@ function ReleaseCard({ release }: { release: Release }) {
     }) ?? release.external_urls.spotify;
 
   return (
-    <article className="release-card">
+    <article
+      className={`release-card ${selected ? "selected" : ""}`}
+      onClick={(event) => {
+        const target = event.target as HTMLElement;
+        if (target.closest("a, button, input, label")) return;
+        onToggle();
+      }}
+    >
       <div className="cover-wrap">
         {coverUrl && (
           <img alt="" decoding="async" loading="lazy" src={coverUrl} />
         )}
+        <label
+          className="release-selector"
+          onClick={(event) => event.stopPropagation()}
+          title={selected ? "Remove from selection" : "Select release"}
+        >
+          <input
+            aria-label={`${selected ? "Deselect" : "Select"} ${release.name}`}
+            checked={selected}
+            onChange={onToggle}
+            type="checkbox"
+          />
+          <span aria-hidden="true">
+            {selected && <Check size={14} strokeWidth={3} />}
+          </span>
+        </label>
       </div>
       <div className="release-actions">
         <span className="release-badge">{release.album_type}</span>
@@ -1000,6 +1042,7 @@ function ReleaseCard({ release }: { release: Release }) {
 }
 
 function ReleasesView({ userId }: { userId: string }) {
+  const playback = usePlayback();
   const initialSnapshot = freshReleaseSnapshot(releaseMemoryCache.get(userId));
   const [releases, setReleases] = useState<Release[]>(
     () => initialSnapshot?.releases ?? [],
@@ -1023,6 +1066,17 @@ function ReleasesView({ userId }: { userId: string }) {
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState("newest");
+  const [selectedReleaseIds, setSelectedReleaseIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [selectionError, setSelectionError] = useState("");
+  const [bulkPending, setBulkPending] = useState<"queue" | "playlist" | "">("");
+  const [bulkProgress, setBulkProgress] = useState({ complete: 0, total: 0 });
+  const [bulkPlaylistOpen, setBulkPlaylistOpen] = useState(false);
+  const [bulkPlaylists, setBulkPlaylists] = useState<Playlist[]>([]);
+  const [bulkPlaylistsLoading, setBulkPlaylistsLoading] = useState(false);
+  const [bulkDestinationId, setBulkDestinationId] = useState("");
+  const [toast, setToast] = useState("");
   const [releaseRenderLimit, setReleaseRenderLimit] = useState(
     INITIAL_RELEASE_RENDER_LIMIT,
   );
@@ -1196,6 +1250,168 @@ function ReleasesView({ userId }: { userId: string }) {
 
   useEffect(() => () => scanController.current?.abort(), []);
 
+  useEffect(() => {
+    if (!bulkPlaylistOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !bulkPending) {
+        setBulkPlaylistOpen(false);
+      }
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [bulkPending, bulkPlaylistOpen]);
+
+  const showReleaseToast = useCallback((message: string) => {
+    setToast(message);
+    window.setTimeout(() => setToast(""), 3600);
+  }, []);
+
+  const toggleReleaseSelection = (releaseId: string) => {
+    const isSelected = selectedReleaseIds.has(releaseId);
+    if (!isSelected && selectedReleaseIds.size >= MAX_RELEASE_SELECTION) {
+      setSelectionError(
+        `Choose up to ${MAX_RELEASE_SELECTION} releases per bulk action.`,
+      );
+      return;
+    }
+    setSelectionError("");
+    setSelectedReleaseIds((current) => {
+      const next = new Set(current);
+      if (next.has(releaseId)) next.delete(releaseId);
+      else next.add(releaseId);
+      return next;
+    });
+  };
+
+  const resolveSelectedReleaseTracks = async () => {
+    const ids = Array.from(selectedReleaseIds);
+    if (ids.length === 0) throw new Error("Choose at least one release.");
+    const data = await getJson<{ tracks: ReleaseSelectionTrack[] }>(
+      "/api/releases/tracks",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      },
+    );
+    if (data.tracks.length === 0) {
+      throw new Error("Spotify did not return any playable tracks for this selection.");
+    }
+    return data.tracks;
+  };
+
+  const addSelectedReleasesToQueue = async () => {
+    if (bulkPending || selectedReleaseIds.size === 0) return;
+    setBulkPending("queue");
+    setSelectionError("");
+    setBulkProgress({ complete: 0, total: 0 });
+    try {
+      const tracks = await resolveSelectedReleaseTracks();
+      setBulkProgress({ complete: 0, total: tracks.length });
+      for (let index = 0; index < tracks.length; index += 1) {
+        const track = tracks[index];
+        const queued = await playback.queue(
+          track.uri,
+          `release-queue:${track.id}:${index}`,
+        );
+        if (!queued) {
+          throw new Error(
+            `Spotify stopped after ${index} of ${tracks.length} tracks. Start playback and try the remaining selection again.`,
+          );
+        }
+        setBulkProgress({ complete: index + 1, total: tracks.length });
+      }
+      showReleaseToast(
+        `Added ${tracks.length} track${tracks.length === 1 ? "" : "s"} to the queue.`,
+      );
+      setSelectedReleaseIds(new Set());
+    } catch (bulkError) {
+      setSelectionError(
+        bulkError instanceof Error
+          ? bulkError.message
+          : "Could not add these releases to the queue.",
+      );
+    } finally {
+      setBulkPending("");
+      setBulkProgress({ complete: 0, total: 0 });
+    }
+  };
+
+  const openBulkPlaylistDialog = async () => {
+    if (bulkPending || selectedReleaseIds.size === 0) return;
+    setBulkPlaylistOpen(true);
+    setSelectionError("");
+    if (bulkPlaylists.length > 0 || bulkPlaylistsLoading) return;
+    setBulkPlaylistsLoading(true);
+    try {
+      const data = await getJson<{ playlists: Playlist[] }>("/api/playlists");
+      setBulkPlaylists(data.playlists);
+      setBulkDestinationId(data.playlists[0]?.id ?? "");
+    } catch (playlistError) {
+      setSelectionError(
+        playlistError instanceof Error
+          ? playlistError.message
+          : "Could not load your editable playlists.",
+      );
+    } finally {
+      setBulkPlaylistsLoading(false);
+    }
+  };
+
+  const addSelectedReleasesToPlaylist = async () => {
+    if (
+      bulkPending ||
+      selectedReleaseIds.size === 0 ||
+      !bulkDestinationId
+    ) {
+      return;
+    }
+    setBulkPending("playlist");
+    setSelectionError("");
+    setBulkProgress({ complete: 0, total: 0 });
+    try {
+      const tracks = await resolveSelectedReleaseTracks();
+      setBulkProgress({ complete: 0, total: tracks.length });
+      let added = 0;
+      for (
+        let offset = 0;
+        offset < tracks.length;
+        offset += PLAYLIST_ADD_CHUNK_SIZE
+      ) {
+        const uris = tracks
+          .slice(offset, offset + PLAYLIST_ADD_CHUNK_SIZE)
+          .map((track) => track.uri);
+        await getJson<{ snapshotId: string; added: number }>(
+          `/api/playlists/${encodeURIComponent(bulkDestinationId)}/items`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ uris }),
+          },
+        );
+        added += uris.length;
+        setBulkProgress({ complete: added, total: tracks.length });
+      }
+      const destination = bulkPlaylists.find(
+        (playlist) => playlist.id === bulkDestinationId,
+      );
+      showReleaseToast(
+        `Added ${tracks.length} track${tracks.length === 1 ? "" : "s"} to ${destination?.name ?? "the playlist"}.`,
+      );
+      setSelectedReleaseIds(new Set());
+      setBulkPlaylistOpen(false);
+    } catch (bulkError) {
+      setSelectionError(
+        bulkError instanceof Error
+          ? bulkError.message
+          : "Could not add these releases to the playlist.",
+      );
+    } finally {
+      setBulkPending("");
+      setBulkProgress({ complete: 0, total: 0 });
+    }
+  };
+
   const releaseGroups = useMemo(() => {
     const needle = query.toLowerCase();
     const filtered = releases.filter((release) =>
@@ -1254,6 +1470,37 @@ function ReleasesView({ userId }: { userId: string }) {
     }, []);
   }, [releaseGroups, releaseRenderLimit]);
   const renderedReleaseCount = Math.min(releaseRenderLimit, visibleCount);
+  const selectableRenderedReleaseIds = useMemo(
+    () =>
+      renderedReleaseGroups
+        .flatMap((group) => group.releases.map((release) => release.id))
+        .slice(0, MAX_RELEASE_SELECTION),
+    [renderedReleaseGroups],
+  );
+  const renderedSelectionComplete =
+    selectableRenderedReleaseIds.length > 0 &&
+    selectableRenderedReleaseIds.every((id) => selectedReleaseIds.has(id));
+
+  const toggleRenderedReleaseSelection = () => {
+    setSelectionError("");
+    setSelectedReleaseIds((current) => {
+      const next = new Set(current);
+      if (renderedSelectionComplete) {
+        for (const id of selectableRenderedReleaseIds) next.delete(id);
+        return next;
+      }
+      for (const id of selectableRenderedReleaseIds) {
+        if (next.size >= MAX_RELEASE_SELECTION) break;
+        next.add(id);
+      }
+      return next;
+    });
+    if (visibleCount > MAX_RELEASE_SELECTION && !renderedSelectionComplete) {
+      setSelectionError(
+        `Selected the first ${MAX_RELEASE_SELECTION} shown releases. Complete this action before selecting more.`,
+      );
+    }
+  };
 
   useEffect(() => {
     if (renderedReleaseCount >= visibleCount) return;
@@ -1387,6 +1634,80 @@ function ReleasesView({ userId }: { userId: string }) {
           )}
         </div>
       </div>
+      {visibleCount > 0 && (
+        <section
+          aria-label="Selected release actions"
+          className={`release-selection-bar ${
+            selectedReleaseIds.size > 0 ? "has-selection" : ""
+          }`}
+        >
+          <div className="release-selection-copy">
+            <strong>
+              {selectedReleaseIds.size > 0
+                ? `${selectedReleaseIds.size} release${selectedReleaseIds.size === 1 ? "" : "s"} selected`
+                : "Select releases for a bulk action"}
+            </strong>
+            <span>
+              Album tracks are loaded only when you add the selection somewhere.
+            </span>
+          </div>
+          <div className="release-selection-actions">
+            <button
+              className="secondary-button"
+              disabled={Boolean(bulkPending)}
+              onClick={toggleRenderedReleaseSelection}
+              type="button"
+            >
+              <Check size={14} />
+              {renderedSelectionComplete ? "Deselect shown" : "Select shown"}
+            </button>
+            {selectedReleaseIds.size > 0 && (
+              <button
+                className="secondary-button"
+                disabled={Boolean(bulkPending)}
+                onClick={() => {
+                  setSelectedReleaseIds(new Set());
+                  setSelectionError("");
+                }}
+                type="button"
+              >
+                Clear
+              </button>
+            )}
+            <button
+              className="secondary-button"
+              disabled={
+                selectedReleaseIds.size === 0 ||
+                Boolean(bulkPending) ||
+                !playback.authorized
+              }
+              onClick={() => void addSelectedReleasesToQueue()}
+              type="button"
+            >
+              {bulkPending === "queue"
+                ? <LoaderCircle className="spinner" size={14} />
+                : <ListEnd size={14} />}
+              {bulkPending === "queue" && bulkProgress.total > 0
+                ? `${bulkProgress.complete}/${bulkProgress.total}`
+                : "Add to queue"}
+            </button>
+            <button
+              className="primary-button"
+              disabled={selectedReleaseIds.size === 0 || Boolean(bulkPending)}
+              onClick={() => void openBulkPlaylistDialog()}
+              type="button"
+            >
+              <ListPlus size={14} />
+              Add to playlist
+            </button>
+          </div>
+          {selectionError && (
+            <p className="release-selection-error" role="alert">
+              {selectionError}
+            </p>
+          )}
+        </section>
+      )}
       {showProgress && (
         <section className="scan-progress" aria-label="Release scan progress">
           <div className="scan-progress-head">
@@ -1508,7 +1829,12 @@ function ReleasesView({ userId }: { userId: string }) {
                 </header>
                 <div className="release-grid">
                   {group.releases.map((release) => (
-                    <ReleaseCard key={release.id} release={release} />
+                    <ReleaseCard
+                      key={release.id}
+                      onToggle={() => toggleReleaseSelection(release.id)}
+                      release={release}
+                      selected={selectedReleaseIds.has(release.id)}
+                    />
                   ))}
                 </div>
               </section>
@@ -1521,9 +1847,98 @@ function ReleasesView({ userId }: { userId: string }) {
           )}
         </div>
       )}
+      {bulkPlaylistOpen && (
+        <div
+          className="track-action-backdrop"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target && !bulkPending) {
+              setBulkPlaylistOpen(false);
+            }
+          }}
+        >
+          <section
+            aria-labelledby="release-playlist-title"
+            aria-modal="true"
+            className="track-action-dialog"
+            role="dialog"
+          >
+            <header className="track-action-dialog-head">
+              <div>
+                <span>Selected releases</span>
+                <h2 id="release-playlist-title">Add every track</h2>
+                <p>
+                  {selectedReleaseIds.size} release
+                  {selectedReleaseIds.size === 1 ? "" : "s"} selected
+                </p>
+              </div>
+              <button
+                aria-label="Close playlist selection"
+                disabled={Boolean(bulkPending)}
+                onClick={() => setBulkPlaylistOpen(false)}
+                type="button"
+              >
+                <X size={17} />
+              </button>
+            </header>
+            <div className="track-action-playlist">
+              <label htmlFor="release-destination-playlist">
+                Destination playlist
+              </label>
+              {bulkPlaylistsLoading ? (
+                <div className="release-playlist-loading" role="status">
+                  <LoaderCircle className="spinner" size={16} />
+                  Loading editable playlists
+                </div>
+              ) : bulkPlaylists.length === 0 ? (
+                <div className="release-playlist-loading" role="status">
+                  No owned or collaborative playlists were found.
+                </div>
+              ) : (
+                <select
+                  disabled={Boolean(bulkPending) || bulkPlaylists.length === 0}
+                  id="release-destination-playlist"
+                  onChange={(event) =>
+                    setBulkDestinationId(event.target.value)
+                  }
+                  value={bulkDestinationId}
+                >
+                  {bulkPlaylists.map((playlist) => (
+                    <option key={playlist.id} value={playlist.id}>
+                      {playlist.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <button
+                className="primary-button"
+                disabled={
+                  !bulkDestinationId ||
+                  Boolean(bulkPending) ||
+                  bulkPlaylistsLoading
+                }
+                onClick={() => void addSelectedReleasesToPlaylist()}
+                type="button"
+              >
+                {bulkPending === "playlist"
+                  ? <LoaderCircle className="spinner" size={15} />
+                  : <ListPlus size={15} />}
+                {bulkPending === "playlist" && bulkProgress.total > 0
+                  ? `Adding ${bulkProgress.complete}/${bulkProgress.total}`
+                  : "Add all tracks"}
+              </button>
+            </div>
+            {selectionError && (
+              <p className="track-action-error" role="alert">
+                {selectionError}
+              </p>
+            )}
+          </section>
+        </div>
+      )}
       <p className="legal-note">
         Metadata and cover art provided by Spotify. Open any release to view it on Spotify.
       </p>
+      {toast && <div className="toast"><Check size={15} />{toast}</div>}
     </main>
   );
 }
@@ -1545,6 +1960,11 @@ function PlaylistsView() {
   const [descending, setDescending] = useState(false);
   const [toast, setToast] = useState("");
   const [actionItem, setActionItem] = useState<PlaylistItem | null>(null);
+  const [songContextMenu, setSongContextMenu] = useState<{
+    entry: PlaylistItem;
+    x: number;
+    y: number;
+  } | null>(null);
   const [actionPending, setActionPending] = useState<"queue" | "playlist" | "">("");
   const [actionError, setActionError] = useState("");
   const [destinationPlaylistId, setDestinationPlaylistId] = useState("");
@@ -1657,6 +2077,24 @@ function PlaylistsView() {
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [actionItem, actionPending]);
 
+  useEffect(() => {
+    if (!songContextMenu) return;
+    const closeMenu = () => setSongContextMenu(null);
+    const closeOnKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeMenu();
+    };
+    window.addEventListener("pointerdown", closeMenu);
+    window.addEventListener("resize", closeMenu);
+    window.addEventListener("scroll", closeMenu, true);
+    window.addEventListener("keydown", closeOnKey);
+    return () => {
+      window.removeEventListener("pointerdown", closeMenu);
+      window.removeEventListener("resize", closeMenu);
+      window.removeEventListener("scroll", closeMenu, true);
+      window.removeEventListener("keydown", closeOnKey);
+    };
+  }, [songContextMenu]);
+
   const visibleItems = useMemo(() => {
     const needle = query.toLowerCase();
     const filtered = items.filter((entry) =>
@@ -1727,6 +2165,15 @@ function PlaylistsView() {
     setActionPending("");
     setActionError("");
     setActionItem(entry);
+  };
+
+  const addContextSongToQueue = async (entry: PlaylistItem) => {
+    setSongContextMenu(null);
+    const queued = await playback.queue(
+      entry.item.uri,
+      `context-queue:${entry.key}`,
+    );
+    if (queued) showToast(`Added “${entry.item.name}” to the queue.`);
   };
 
   const addActionItemToQueue = async () => {
@@ -1910,6 +2357,21 @@ function PlaylistsView() {
       setSaveProgress(0);
     }
   };
+
+  const contextEntry = songContextMenu?.entry;
+  const contextCanUseTrack =
+    contextEntry !== undefined &&
+    !contextEntry.is_local &&
+    contextEntry.item.is_local !== true &&
+    /^spotify:track:[a-zA-Z0-9]{22}$/.test(contextEntry.item.uri);
+  const contextCanPlay =
+    contextCanUseTrack && contextEntry.item.is_playable !== false;
+  const contextAlbumHref = contextEntry?.item.album
+    ? spotifyAppHref({
+        uri: contextEntry.item.album.uri,
+        webUrl: contextEntry.item.album.external_urls?.spotify,
+      })
+    : null;
 
   return (
     <main className="main playlist-main">
@@ -2279,6 +2741,22 @@ function PlaylistsView() {
                       <tr
                         className={isCurrentTrack ? "current-track" : undefined}
                         key={entry.key}
+                        onContextMenu={(event) => {
+                          event.preventDefault();
+                          const menuWidth = 236;
+                          const menuHeight = 202;
+                          setSongContextMenu({
+                            entry,
+                            x: Math.max(
+                              12,
+                              Math.min(event.clientX, window.innerWidth - menuWidth - 12),
+                            ),
+                            y: Math.max(
+                              12,
+                              Math.min(event.clientY, window.innerHeight - menuHeight - 12),
+                            ),
+                          });
+                        }}
                       >
                         {visibleColumns.map((column) => (
                           <td
@@ -2363,6 +2841,79 @@ function PlaylistsView() {
               </>
             )}
           </section>
+        </div>
+      )}
+      {songContextMenu && contextEntry && (
+        <div
+          aria-label={`Actions for ${contextEntry.item.name}`}
+          className="song-context-menu"
+          onContextMenu={(event) => event.preventDefault()}
+          onPointerDown={(event) => event.stopPropagation()}
+          role="menu"
+          style={{ left: songContextMenu.x, top: songContextMenu.y }}
+        >
+          <div className="song-context-heading">
+            <strong>{contextEntry.item.name}</strong>
+            <span>
+              {contextEntry.item.artists?.map((artist) => artist.name).join(", ") ||
+                "Unknown artist"}
+            </span>
+          </div>
+          <button
+            disabled={
+              !contextCanPlay ||
+              !playback.deviceReady ||
+              Boolean(playback.pendingKey)
+            }
+            onClick={() => {
+              setSongContextMenu(null);
+              void playback.play(
+                { uris: [contextEntry.item.uri] },
+                `context-play:${contextEntry.key}`,
+              );
+            }}
+            role="menuitem"
+            type="button"
+          >
+            <Play size={15} fill="currentColor" />
+            Play
+          </button>
+          <button
+            disabled={
+              !contextCanUseTrack ||
+              !playback.authorized ||
+              Boolean(playback.pendingKey)
+            }
+            onClick={() => void addContextSongToQueue(contextEntry)}
+            role="menuitem"
+            type="button"
+          >
+            <ListEnd size={15} />
+            Add to queue
+          </button>
+          <button
+            disabled={!contextCanUseTrack || Boolean(playback.pendingKey)}
+            onClick={() => {
+              setSongContextMenu(null);
+              openTrackActions(contextEntry);
+            }}
+            role="menuitem"
+            type="button"
+          >
+            <ListPlus size={15} />
+            Add to playlist
+          </button>
+          {contextAlbumHref ? (
+            <a href={contextAlbumHref} role="menuitem">
+              <ExternalLink size={15} />
+              Go to album in Spotify
+            </a>
+          ) : (
+            <button disabled role="menuitem" type="button">
+              <ExternalLink size={15} />
+              Album unavailable
+            </button>
+          )}
         </div>
       )}
       {actionItem && (
