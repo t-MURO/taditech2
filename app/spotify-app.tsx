@@ -5,6 +5,7 @@ import {
   ArrowRight,
   ArrowUpDown,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   CircleUserRound,
@@ -175,6 +176,7 @@ const COLUMN_STORAGE_KEY = "taditech-playlist-columns-v1";
 const RECENT_PLAYLIST_STORAGE_KEY = "taditech-recent-playlist-destinations-v1";
 const MAX_RECENT_PLAYLISTS = 12;
 const PLAYLIST_SEARCH_THRESHOLD = 10;
+const MOBILE_TRACK_RENDER_BATCH = 100;
 const INITIAL_RELEASE_RENDER_LIMIT = 48;
 const RELEASE_RENDER_BATCH_SIZE = 48;
 const MAX_RELEASE_SELECTION = 20;
@@ -2653,6 +2655,170 @@ function ReleasesView({ userId }: { userId: string }) {
   );
 }
 
+function MobilePlaylistTracks({
+  entries,
+  expandedKey,
+  metadataColumns,
+  onContextMenu,
+  onMoreActions,
+  onPlay,
+  onToggleMetadata,
+}: {
+  entries: PlaylistItem[];
+  expandedKey: string | null;
+  metadataColumns: TrackColumn[];
+  onContextMenu: (entry: PlaylistItem, x: number, y: number) => void;
+  onMoreActions: (entry: PlaylistItem) => void;
+  onPlay: (entry: PlaylistItem, key: string) => void;
+  onToggleMetadata: (key: string) => void;
+}) {
+  const playback = usePlayback();
+
+  if (entries.length === 0) {
+    return (
+      <div className="mobile-track-empty" role="status">
+        <Music2 size={22} />
+        No tracks match this view.
+      </div>
+    );
+  }
+
+  return (
+    <div className="mobile-track-list" role="list">
+      {entries.map((entry, index) => {
+        const canPlay =
+          !entry.is_local &&
+          entry.item.is_local !== true &&
+          entry.item.is_playable !== false &&
+          /^spotify:track:[a-zA-Z0-9]{22}$/.test(entry.item.uri);
+        const canAdd =
+          !entry.is_local &&
+          entry.item.is_local !== true &&
+          /^spotify:track:[a-zA-Z0-9]{22}$/.test(entry.item.uri);
+        const playbackKey = `mobile-track:${entry.key}`;
+        const spotifyHref = spotifyAppHref({
+          uri: entry.item.uri,
+          webUrl: entry.item.external_urls?.spotify,
+        });
+        const coverUrl = preferredSpotifyImage(entry.item.album?.images);
+        const artists =
+          entry.item.artists?.map((artist) => artist.name).join(", ") ||
+          "Unknown artist";
+        const album = entry.item.album?.name;
+        const isCurrentTrack = playback.currentTrackUri === entry.item.uri;
+        const expanded = expandedKey === entry.key;
+
+        return (
+          <article
+            className={`mobile-track-card ${
+              isCurrentTrack ? "current-track" : ""
+            }`}
+            key={entry.key}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              onContextMenu(entry, event.clientX, event.clientY);
+            }}
+            role="listitem"
+          >
+            <div className="mobile-track-card-main">
+              <span className="mobile-track-position">{index + 1}</span>
+              {coverUrl ? (
+                <img
+                  alt=""
+                  className="mobile-track-cover"
+                  decoding="async"
+                  loading="lazy"
+                  src={coverUrl}
+                />
+              ) : (
+                <span className="mobile-track-cover mobile-track-cover-placeholder">
+                  <Music2 size={18} />
+                </span>
+              )}
+              <div className="mobile-track-copy">
+                <strong>{entry.item.name}</strong>
+                <span>{artists}</span>
+                {album && <small>{album}</small>}
+              </div>
+              <div className="mobile-track-actions">
+                <button
+                  aria-label={`Play ${entry.item.name} in this browser`}
+                  disabled={
+                    !canPlay ||
+                    !playback.deviceReady ||
+                    Boolean(playback.pendingKey)
+                  }
+                  onClick={() => onPlay(entry, playbackKey)}
+                  title="Play in browser"
+                  type="button"
+                >
+                  {playback.pendingKey === playbackKey ? (
+                    <LoaderCircle className="spinner" size={15} />
+                  ) : (
+                    <Play fill="currentColor" size={15} />
+                  )}
+                </button>
+                <button
+                  aria-label={`More actions for ${entry.item.name}`}
+                  disabled={!canAdd || Boolean(playback.pendingKey)}
+                  onClick={() => onMoreActions(entry)}
+                  title="Queue or add to a playlist"
+                  type="button"
+                >
+                  <Ellipsis size={17} />
+                </button>
+              </div>
+            </div>
+            <div className="mobile-track-card-foot">
+              <span>{formatDuration(entry.item.duration_ms)}</span>
+              {entry.item.explicit && <span className="explicit">Explicit</span>}
+              {isCurrentTrack && (
+                <span className="now-playing-indicator">
+                  {playback.isPlaying ? "Playing" : "Paused"}
+                </span>
+              )}
+              {spotifyHref && (
+                <a href={spotifyHref} title="Open in Spotify app">
+                  <ExternalLink size={13} />
+                  Spotify
+                </a>
+              )}
+            </div>
+            {metadataColumns.length > 0 && (
+              <>
+                <button
+                  aria-expanded={expanded}
+                  className="mobile-track-metadata-toggle"
+                  onClick={() => onToggleMetadata(entry.key)}
+                  type="button"
+                >
+                  <Columns3 size={14} />
+                  {expanded
+                    ? "Hide metadata"
+                    : `${metadataColumns.length} more field${
+                        metadataColumns.length === 1 ? "" : "s"
+                      }`}
+                  <ChevronDown size={14} />
+                </button>
+                {expanded && (
+                  <dl className="mobile-track-metadata">
+                    {metadataColumns.map((column) => (
+                      <div key={column.id}>
+                        <dt>{column.sortLabel ?? column.label}</dt>
+                        <dd>{column.render(entry, index)}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+              </>
+            )}
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
 function PlaylistsView() {
   const playback = usePlayback();
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
@@ -2685,10 +2851,24 @@ function PlaylistsView() {
   const [actionError, setActionError] = useState("");
   const [destinationPlaylistId, setDestinationPlaylistId] = useState("");
   const [loadedPlaylistId, setLoadedPlaylistId] = useState<string | null>(null);
+  const [mobilePlaylistPickerOpen, setMobilePlaylistPickerOpen] =
+    useState(false);
+  const [mobileTrackView, setMobileTrackView] = useState(false);
+  const [expandedMobileTrackKey, setExpandedMobileTrackKey] = useState<
+    string | null
+  >(null);
+  const [mobileTrackRenderLimit, setMobileTrackRenderLimit] = useState(
+    MOBILE_TRACK_RENDER_BATCH,
+  );
   const [visibleColumnIds, setVisibleColumnIds] =
     useState<ColumnId[]>(DEFAULT_COLUMN_IDS);
   const itemLoadController = useRef<AbortController | null>(null);
   const selectedPlaylistId = selected?.id ?? null;
+
+  useEffect(() => {
+    setMobileTrackRenderLimit(MOBILE_TRACK_RENDER_BATCH);
+    setExpandedMobileTrackKey(null);
+  }, [descending, query, selectedPlaylistId, sortKey]);
 
   useEffect(() => {
     try {
@@ -2698,6 +2878,31 @@ function PlaylistsView() {
       // A blocked or malformed device preference should not block the playlist table.
     }
   }, []);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 600px)");
+    const update = () => {
+      setMobileTrackView(media.matches);
+      if (!media.matches) setMobilePlaylistPickerOpen(false);
+    };
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    if (!mobilePlaylistPickerOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobilePlaylistPickerOpen(false);
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [mobilePlaylistPickerOpen]);
 
   useEffect(() => {
     try {
@@ -2810,6 +3015,7 @@ function PlaylistsView() {
     setError("");
     setItems([]);
     setLoadedPlaylistId(null);
+    setExpandedMobileTrackKey(null);
     try {
       const data = await getJson<{ items: Omit<PlaylistItem, "position">[] }>(
         `/api/playlists/${encodeURIComponent(playlist.id)}/items`,
@@ -3240,6 +3446,30 @@ function PlaylistsView() {
     }
   };
 
+  const openSongContextMenu = (
+    entry: PlaylistItem,
+    clientX: number,
+    clientY: number,
+  ) => {
+    const menuWidth = 236;
+    const menuHeight = 202;
+    setContextPlaylistQuery("");
+    setContextPlaylistError("");
+    setContextPlaylistPendingId("");
+    setSongContextMenu({
+      entry,
+      view: "actions",
+      x: Math.max(
+        12,
+        Math.min(clientX, window.innerWidth - menuWidth - 12),
+      ),
+      y: Math.max(
+        12,
+        Math.min(clientY, window.innerHeight - menuHeight - 12),
+      ),
+    });
+  };
+
   const contextEntry = songContextMenu?.entry;
   const contextCanUseTrack =
     contextEntry !== undefined &&
@@ -3254,6 +3484,18 @@ function PlaylistsView() {
         webUrl: contextEntry.item.album.external_urls?.spotify,
       })
     : null;
+  const selectedPlaylistCover = preferredSpotifyImage(selected?.images);
+  const mobileMetadataColumns = visibleColumns.filter(
+    (column) =>
+      ![
+        "position",
+        "albumCover",
+        "track",
+        "artist",
+        "album",
+        "duration",
+      ].includes(column.id),
+  );
 
   return (
     <main className="main playlist-main">
@@ -3282,17 +3524,69 @@ function PlaylistsView() {
           }`}
         >
           <aside className="playlist-sidebar" aria-label="Editable playlists">
-            <div className="playlist-sidebar-tools">
-              <label className="playlist-search">
-                <Search size={15} color="var(--dim)" />
-                <input
-                  aria-label="Search playlists"
-                  onChange={(event) => setPlaylistQuery(event.target.value)}
-                  placeholder={`Search ${playlists.length} playlists`}
-                  type="search"
-                  value={playlistQuery}
-                />
-              </label>
+            <button
+              aria-expanded={mobilePlaylistPickerOpen}
+              aria-haspopup="dialog"
+              className="mobile-playlist-trigger"
+              onClick={() => setMobilePlaylistPickerOpen(true)}
+              type="button"
+            >
+              {selectedPlaylistCover ? (
+                <img alt="" src={selectedPlaylistCover} />
+              ) : (
+                <span className="playlist-cover-placeholder">
+                  <Music2 size={20} />
+                </span>
+              )}
+              <span className="mobile-playlist-trigger-copy">
+                <small>Current playlist</small>
+                <strong>{selected?.name ?? "Choose a playlist"}</strong>
+                <em>
+                  {selected?.itemCount ?? 0} items · Tap to switch
+                </em>
+              </span>
+              <ChevronDown size={18} />
+            </button>
+            <div
+              aria-hidden={!mobilePlaylistPickerOpen && mobileTrackView}
+              className={`playlist-picker-surface ${
+                mobilePlaylistPickerOpen ? "open" : ""
+              }`}
+              onMouseDown={(event) => {
+                if (event.currentTarget === event.target) {
+                  setMobilePlaylistPickerOpen(false);
+                }
+              }}
+            >
+              <div
+                aria-label="Choose a playlist"
+                aria-modal={mobileTrackView ? "true" : undefined}
+                className="mobile-playlist-picker-sheet"
+                role={mobileTrackView ? "dialog" : undefined}
+              >
+            <div className="mobile-playlist-picker-title">
+              <span>Your playlists</span>
+              <strong>Choose what to work on</strong>
+            </div>
+            <div
+              className={`playlist-sidebar-tools ${
+                playlists.length <= PLAYLIST_SEARCH_THRESHOLD ? "compact" : ""
+              }`}
+            >
+              {(!mobileTrackView ||
+                playlists.length > PLAYLIST_SEARCH_THRESHOLD) && (
+                <label className="playlist-search">
+                  <Search size={15} color="var(--dim)" />
+                  <input
+                    aria-label="Search playlists"
+                    autoFocus={mobilePlaylistPickerOpen}
+                    onChange={(event) => setPlaylistQuery(event.target.value)}
+                    placeholder={`Search ${playlists.length} playlists`}
+                    type="search"
+                    value={playlistQuery}
+                  />
+                </label>
+              )}
               <button
                 aria-controls="playlist-sidebar-list"
                 aria-expanded={!playlistSidebarCollapsed}
@@ -3313,6 +3607,14 @@ function PlaylistsView() {
                 {playlistSidebarCollapsed
                   ? <PanelLeftOpen size={17} />
                   : <PanelLeftClose size={17} />}
+              </button>
+              <button
+                aria-label="Close playlist chooser"
+                className="mobile-playlist-picker-close"
+                onClick={() => setMobilePlaylistPickerOpen(false)}
+                type="button"
+              >
+                <X size={18} />
               </button>
             </div>
             <div className="playlist-list" id="playlist-sidebar-list">
@@ -3335,10 +3637,13 @@ function PlaylistsView() {
                       disabled={saving}
                       key={playlist.id}
                       onClick={() => {
+                        setMobilePlaylistPickerOpen(false);
+                        setPlaylistQuery("");
                         if (selected?.id === playlist.id) return;
                         itemLoadController.current?.abort();
                         setItems([]);
                         setLoadedPlaylistId(null);
+                        setExpandedMobileTrackKey(null);
                         setSelected(playlist);
                       }}
                       title={playlistSidebarCollapsed ? playlist.name : undefined}
@@ -3376,6 +3681,8 @@ function PlaylistsView() {
                   );
                 })
               )}
+            </div>
+              </div>
             </div>
           </aside>
           <section className="playlist-panel">
@@ -3567,7 +3874,48 @@ function PlaylistsView() {
                   {descending ? "Descending" : "Ascending"}
                 </button>
               </div>
-              <div className="table-scroll">
+              {mobileTrackView ? (
+                <>
+                  <MobilePlaylistTracks
+                    entries={visibleItems.slice(0, mobileTrackRenderLimit)}
+                    expandedKey={expandedMobileTrackKey}
+                    metadataColumns={mobileMetadataColumns}
+                    onContextMenu={openSongContextMenu}
+                    onMoreActions={openTrackActions}
+                    onPlay={playPlaylistEntry}
+                    onToggleMetadata={(key) =>
+                      setExpandedMobileTrackKey((current) =>
+                        current === key ? null : key,
+                      )
+                    }
+                  />
+                  {mobileTrackRenderLimit < visibleItems.length && (
+                    <div className="mobile-track-load-more">
+                      <span>
+                        Showing {mobileTrackRenderLimit} of {visibleItems.length}
+                      </span>
+                      <button
+                        className="secondary-button"
+                        onClick={() =>
+                          setMobileTrackRenderLimit((current) =>
+                            Math.min(
+                              current + MOBILE_TRACK_RENDER_BATCH,
+                              visibleItems.length,
+                            ),
+                          )
+                        }
+                        type="button"
+                      >
+                        Show next {Math.min(
+                          MOBILE_TRACK_RENDER_BATCH,
+                          visibleItems.length - mobileTrackRenderLimit,
+                        )}
+                      </button>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="table-scroll">
                 <table className="track-table">
                   <thead>
                     <tr>
@@ -3625,23 +3973,11 @@ function PlaylistsView() {
                         key={entry.key}
                         onContextMenu={(event) => {
                           event.preventDefault();
-                          const menuWidth = 236;
-                          const menuHeight = 202;
-                          setContextPlaylistQuery("");
-                          setContextPlaylistError("");
-                          setContextPlaylistPendingId("");
-                          setSongContextMenu({
+                          openSongContextMenu(
                             entry,
-                            view: "actions",
-                            x: Math.max(
-                              12,
-                              Math.min(event.clientX, window.innerWidth - menuWidth - 12),
-                            ),
-                            y: Math.max(
-                              12,
-                              Math.min(event.clientY, window.innerHeight - menuHeight - 12),
-                            ),
-                          });
+                            event.clientX,
+                            event.clientY,
+                          );
                         }}
                       >
                         {visibleColumns.map((column) => (
@@ -3721,6 +4057,7 @@ function PlaylistsView() {
                   </tbody>
                 </table>
               </div>
+              )}
               </>
             )}
           </section>
