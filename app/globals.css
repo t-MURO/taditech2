@@ -756,6 +756,11 @@ details.column-config > summary > span {
   border-color: var(--green);
   color: var(--night);
 }
+.release-action-buttons .release-like-button.saved {
+  background: rgba(183,247,47,.12);
+  border-color: rgba(183,247,47,.48);
+  color: var(--green);
+}
 .release-action-buttons button:hover,
 .release-action-buttons a:hover,
 .track-action-buttons button:hover,
@@ -1572,8 +1577,12 @@ details.column-config > summary > span {
   text-transform: uppercase;
 }
 .song-context-playlist-empty {
+  align-items: center;
   color: var(--muted);
+  display: flex;
   font-size: 10px;
+  gap: 8px;
+  justify-content: center;
   padding: 18px 10px;
   text-align: center;
 }

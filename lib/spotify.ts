@@ -13,6 +13,8 @@ export const SPOTIFY_SCOPES = [
   "playlist-read-collaborative",
   "playlist-modify-public",
   "playlist-modify-private",
+  "user-library-read",
+  "user-library-modify",
 ].join(" ");
 
 export const PLAYBACK_SCOPES = [
@@ -25,6 +27,8 @@ export const PLAYLIST_MODIFY_SCOPES = [
   "playlist-modify-public",
   "playlist-modify-private",
 ];
+export const LIBRARY_READ_SCOPES = ["user-library-read"];
+export const LIBRARY_MODIFY_SCOPES = ["user-library-modify"];
 
 export class SpotifyError extends Error {
   status: number;
@@ -98,6 +102,18 @@ export async function hasPlaylistModifyScopes() {
   const jar = await cookies();
   const granted = new Set((jar.get("spotify_scopes")?.value || "").split(" "));
   return PLAYLIST_MODIFY_SCOPES.every((scope) => granted.has(scope));
+}
+
+export async function hasLibraryReadScopes() {
+  const jar = await cookies();
+  const granted = new Set((jar.get("spotify_scopes")?.value || "").split(" "));
+  return LIBRARY_READ_SCOPES.every((scope) => granted.has(scope));
+}
+
+export async function hasLibraryModifyScopes() {
+  const jar = await cookies();
+  const granted = new Set((jar.get("spotify_scopes")?.value || "").split(" "));
+  return LIBRARY_MODIFY_SCOPES.every((scope) => granted.has(scope));
 }
 
 async function refreshAccessToken(refreshToken: string) {
