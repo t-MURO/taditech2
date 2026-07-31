@@ -14,6 +14,8 @@ import {
   LoaderCircle,
   LogOut,
   Music2,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pause,
   Play,
   RefreshCw,
@@ -1469,6 +1471,7 @@ function PlaylistsView() {
   const [saving, setSaving] = useState(false);
   const [saveProgress, setSaveProgress] = useState(0);
   const [error, setError] = useState("");
+  const [playlistSidebarCollapsed, setPlaylistSidebarCollapsed] = useState(false);
   const [playlistQuery, setPlaylistQuery] = useState("");
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<ColumnId>("position");
@@ -1767,19 +1770,46 @@ function PlaylistsView() {
           <ListMusic size={28} />No owned or collaborative playlists were found.
         </div>
       ) : (
-        <div className="playlist-layout">
+        <div
+          className={`playlist-layout ${
+            playlistSidebarCollapsed ? "sidebar-collapsed" : ""
+          }`}
+        >
           <aside className="playlist-sidebar" aria-label="Editable playlists">
-            <label className="playlist-search">
-              <Search size={15} color="var(--dim)" />
-              <input
-                aria-label="Search playlists"
-                onChange={(event) => setPlaylistQuery(event.target.value)}
-                placeholder={`Search ${playlists.length} playlists`}
-                type="search"
-                value={playlistQuery}
-              />
-            </label>
-            <div className="playlist-list">
+            <div className="playlist-sidebar-tools">
+              <label className="playlist-search">
+                <Search size={15} color="var(--dim)" />
+                <input
+                  aria-label="Search playlists"
+                  onChange={(event) => setPlaylistQuery(event.target.value)}
+                  placeholder={`Search ${playlists.length} playlists`}
+                  type="search"
+                  value={playlistQuery}
+                />
+              </label>
+              <button
+                aria-controls="playlist-sidebar-list"
+                aria-expanded={!playlistSidebarCollapsed}
+                aria-label={
+                  playlistSidebarCollapsed
+                    ? "Expand playlist sidebar"
+                    : "Collapse playlist sidebar"
+                }
+                className="playlist-sidebar-toggle"
+                onClick={() => setPlaylistSidebarCollapsed((collapsed) => !collapsed)}
+                title={
+                  playlistSidebarCollapsed
+                    ? "Expand playlist sidebar"
+                    : "Collapse playlist sidebar"
+                }
+                type="button"
+              >
+                {playlistSidebarCollapsed
+                  ? <PanelLeftOpen size={17} />
+                  : <PanelLeftClose size={17} />}
+              </button>
+            </div>
+            <div className="playlist-list" id="playlist-sidebar-list">
               {visiblePlaylists.length === 0 ? (
                 <div className="playlist-list-empty" role="status">
                   No playlists match “{playlistQuery.trim()}”.
@@ -1789,6 +1819,7 @@ function PlaylistsView() {
                   const coverUrl = preferredSpotifyImage(playlist.images);
                   return (
                     <button
+                      aria-label={`Select playlist ${playlist.name}`}
                       aria-current={
                         selected?.id === playlist.id ? "true" : undefined
                       }
@@ -1804,6 +1835,7 @@ function PlaylistsView() {
                         setLoadedPlaylistId(null);
                         setSelected(playlist);
                       }}
+                      title={playlistSidebarCollapsed ? playlist.name : undefined}
                       type="button"
                     >
                       {coverUrl ? (
@@ -1818,7 +1850,7 @@ function PlaylistsView() {
                           <Music2 size={20} />
                         </div>
                       )}
-                      <div>
+                      <div className="playlist-row-copy">
                         <h3>{playlist.name}</h3>
                         <p>
                           {playlist.itemCount} items ·{" "}
@@ -1829,7 +1861,11 @@ function PlaylistsView() {
                               : "Private"}
                         </p>
                       </div>
-                      <ChevronRight size={16} color="var(--dim)" />
+                      <ChevronRight
+                        className="playlist-row-chevron"
+                        size={16}
+                        color="var(--dim)"
+                      />
                     </button>
                   );
                 })

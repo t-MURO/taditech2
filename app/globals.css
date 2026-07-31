@@ -669,6 +669,11 @@ details.column-config > summary > span {
   text-transform: uppercase;
 }
 
+.playlist-sidebar-tools {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) 44px;
+}
 .playlist-search {
   align-items: center;
   background: var(--panel);
@@ -691,6 +696,24 @@ details.column-config > summary > span {
   width: 100%;
 }
 .playlist-search input::placeholder { color: var(--dim); }
+.playlist-sidebar-toggle {
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  height: 44px;
+  justify-content: center;
+  transition: background .18s ease, border-color .18s ease, color .18s ease;
+  width: 44px;
+}
+.playlist-sidebar-toggle:hover {
+  background: var(--panel-2);
+  border-color: rgba(255,255,255,.2);
+  color: var(--ink);
+}
 .playlist-list {
   align-content: start;
   display: grid;
@@ -699,9 +722,9 @@ details.column-config > summary > span {
   min-height: 0;
   overscroll-behavior: contain;
   overflow: auto;
-  padding-right: 5px;
-  scrollbar-gutter: stable;
+  scrollbar-width: none;
 }
+.playlist-list::-webkit-scrollbar { display: none; }
 .playlist-list-empty {
   border: 1px dashed var(--line);
   border-radius: 12px;
@@ -1172,6 +1195,21 @@ details.column-config > summary > span {
     flex: 1 1 auto;
     min-height: 0;
   }
+  .playlist-layout.sidebar-collapsed {
+    gap: 18px;
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
+  .sidebar-collapsed .playlist-sidebar-tools { grid-template-columns: 1fr; }
+  .sidebar-collapsed .playlist-search { display: none; }
+  .sidebar-collapsed .playlist-sidebar-toggle { justify-self: center; }
+  .sidebar-collapsed .playlist-row {
+    gap: 0;
+    grid-template-columns: 46px;
+    justify-content: center;
+    padding: 7px;
+  }
+  .sidebar-collapsed .playlist-row-copy,
+  .sidebar-collapsed .playlist-row-chevron { display: none; }
   .playlist-sidebar {
     height: 100%;
     max-height: none;
@@ -1244,6 +1282,8 @@ details.column-config > summary > span {
   .feature, .feature + .feature { border-bottom: 1px solid var(--line); border-right: 0; padding: 24px 0; }
   .page-heading { align-items: start; flex-direction: column; }
   .playlist-layout { grid-template-columns: 1fr; }
+  .playlist-sidebar-tools { grid-template-columns: 1fr; }
+  .playlist-sidebar-toggle { display: none; }
   .playlist-sidebar {
     display: block;
     max-height: none;
