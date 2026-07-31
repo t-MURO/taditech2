@@ -24,6 +24,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import {
+  Fragment,
   startTransition,
   useCallback,
   useEffect,
@@ -2169,8 +2170,13 @@ function PlaylistsView() {
                         uri: entry.item.uri,
                         webUrl: entry.item.external_urls?.spotify,
                       });
+                      const isCurrentTrack =
+                        playback.currentTrackUri === entry.item.uri;
                       return (
-                      <tr key={entry.key}>
+                      <tr
+                        className={isCurrentTrack ? "current-track" : undefined}
+                        key={entry.key}
+                      >
                         {visibleColumns.map((column) => (
                           <td
                             className={column.className}
@@ -2221,6 +2227,15 @@ function PlaylistsView() {
                                   )}
                                 </div>
                               </div>
+                            ) : column.id === "track" ? (
+                              <Fragment>
+                                {column.render(entry, index)}
+                                {isCurrentTrack && (
+                                  <span className="now-playing-indicator">
+                                    {playback.isPlaying ? "Playing" : "Paused"}
+                                  </span>
+                                )}
+                              </Fragment>
                             ) : column.render(entry, index)}
                           </td>
                         ))}

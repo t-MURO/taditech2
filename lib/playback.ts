@@ -13,6 +13,13 @@ export function playbackProgressPercent(position: number, duration: number) {
   );
 }
 
+export function clampPlaybackVolume(volume: number, fallback = 0.72) {
+  if (!Number.isFinite(volume)) {
+    return Math.min(1, Math.max(0, fallback));
+  }
+  return Math.min(1, Math.max(0, volume));
+}
+
 export function playbackElapsed(
   position: number,
   duration: number,

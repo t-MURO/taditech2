@@ -9,6 +9,8 @@ import {
   Play,
   SkipBack,
   SkipForward,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 import {
   createContext,
@@ -22,6 +24,7 @@ import {
 } from "react";
 import {
   clampPlaybackPosition,
+  clampPlaybackVolume,
   displayedPlaybackPosition,
   formatPlaybackTime,
   isSeekKey,
@@ -61,6 +64,7 @@ type SpotifyPlayer = {
   nextTrack(): Promise<void>;
   previousTrack(): Promise<void>;
   seek(positionMs: number): Promise<void>;
+  setVolume(volume: number): Promise<void>;
   togglePlay(): Promise<void>;
 };
 type SpotifyNamespace = {
@@ -86,7 +90,9 @@ type PlayTarget = {
 };
 type PlaybackContextValue = {
   authorized: boolean;
+  currentTrackUri: string;
   deviceReady: boolean;
+  isPlaying: boolean;
   pendingKey: string;
   play: (target: PlayTarget, key: string) => Promise<void>;
 };
@@ -94,6 +100,8 @@ type PlaybackContextValue = {
 const PlaybackContext = createContext<PlaybackContextValue | null>(null);
 let sdkPromise: Promise<SpotifyNamespace> | null = null;
 let tokenPromise: Promise<string> | null = null;
+const DEFAULT_PLAYER_VOLUME = 0.72;
+const PLAYER_VOLUME_STORAGE_KEY = "taditech-player-volume-v1";
 
 class PlaybackClientError extends Error {
   code?: string;
@@ -122,6 +130,9 @@ export function PlaybackProvider({
 }) {
   const playerRef = useRef<SpotifyPlayer | null>(null);
   const [playerEnabled, setPlayerEnabled] = useState(authorized);
+  const [volume, setVolume] = useState(DEFAULT_PLAYER_VOLUME);
+  const volumeRef = useRef(DEFAULT_PLAYER_VOLUME);
+  const lastAudibleVolumeRef = useRef(DEFAULT_PLAYER_VOLUME);
   const [deviceId, setDeviceId] = useState("");
   const deviceIdRef = useRef("");
   const [connecting, setConnecting] = useState(false);
@@ -190,6 +201,50 @@ export function PlaybackProvider({
   }, [clearSeekDraft]);
 
   useEffect(() => {
+    try {
+      const storedValue = window.localStorage.getItem(PLAYER_VOLUME_STORAGE_KEY);
+      if (storedValue === null) return;
+      const storedVolume = Number(storedValue);
+      if (!Number.isFinite(storedVolume)) return;
+      const nextVolume = clampPlaybackVolume(storedVolume);
+      volumeRef.current = nextVolume;
+      if (nextVolume > 0) lastAudibleVolumeRef.current = nextVolume;
+      setVolume(nextVolume);
+    } catch {
+      // A blocked or malformed preference should not prevent playback.
+    }
+  }, []);
+
+  const updateVolume = useCallback((nextValue: number) => {
+    const nextVolume = clampPlaybackVolume(nextValue);
+    volumeRef.current = nextVolume;
+    if (nextVolume > 0) lastAudibleVolumeRef.current = nextVolume;
+    setVolume(nextVolume);
+    try {
+      window.localStorage.setItem(
+        PLAYER_VOLUME_STORAGE_KEY,
+        String(nextVolume),
+      );
+    } catch {
+      // Volume still works for this session when storage is unavailable.
+    }
+    const player = playerRef.current;
+    if (player) {
+      void player.setVolume(nextVolume).catch((volumeError) => {
+        setError(messageFrom(volumeError));
+      });
+    }
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    updateVolume(
+      volume > 0
+        ? 0
+        : clampPlaybackVolume(lastAudibleVolumeRef.current),
+    );
+  }, [updateVolume, volume]);
+
+  useEffect(() => {
     if (!authorized) {
       setConnecting(false);
       setReconnectRequired(true);
@@ -227,7 +282,7 @@ export function PlaybackProvider({
         if (cancelled) return;
         localPlayer = new Spotify.Player({
           name: "Tadi Tech Browser Player",
-          volume: 0.72,
+          volume: volumeRef.current,
           enableMediaSession: true,
           getOAuthToken: (callback) => {
             void fetchPlaybackToken()
@@ -502,17 +557,24 @@ export function PlaybackProvider({
     !reconnectRequired &&
     !connecting &&
     Boolean(deviceId);
+  const currentTrack = state?.track_window.current_track;
+  const currentTrackUri = currentTrack?.uri ?? "";
+  const isPlaying = Boolean(currentTrack && state && !state.paused);
   const value = useMemo<PlaybackContextValue>(
     () => ({
       authorized: authorized && !reconnectRequired,
+      currentTrackUri,
       deviceReady,
+      isPlaying,
       pendingKey:
         pendingKey || (seekDraft !== null ? "control:seek-draft" : ""),
       play,
     }),
     [
       authorized,
+      currentTrackUri,
       deviceReady,
+      isPlaying,
       pendingKey,
       play,
       reconnectRequired,
@@ -520,11 +582,13 @@ export function PlaybackProvider({
     ],
   );
 
-  const currentTrack = state?.track_window.current_track;
   const currentTrackUrl = currentTrack
     ? spotifyAppHref({ uri: currentTrack.uri }) ?? ""
     : "";
   const currentTrackImage = preferredSpotifyImage(currentTrack?.album?.images);
+  const currentTrackArtists =
+    currentTrack?.artists?.map((artist) => artist.name).join(", ") ||
+    "Unknown artist";
   const elapsed = state
     ? playbackElapsed(
         state.position,
@@ -650,6 +714,7 @@ export function PlaybackProvider({
   const seekProgress = state
     ? playbackProgressPercent(displayedElapsed, playbackDuration)
     : 0;
+  const volumePercent = Math.round(volume * 100);
   const seekDisabled =
     !deviceReady ||
     !currentTrack ||
@@ -730,7 +795,8 @@ export function PlaybackProvider({
             </strong>
             <span aria-live={error ? "assertive" : "polite"} role={error ? "alert" : "status"}>
               {currentTrack
-                ? error || currentTrack.artists?.map((artist) => artist.name).join(", ")
+                ? error ||
+                  `${state?.paused ? "Paused" : "Playing"} · ${currentTrackArtists}`
                 : error ||
                   (playerEnabled
                     ? "Choose Play on any release or playlist track."
@@ -873,6 +939,34 @@ export function PlaybackProvider({
               <span aria-hidden="true">{formatPlaybackTime(playbackDuration)}</span>
             </div>
           )}
+          <div className="player-volume">
+            <button
+              aria-label={volume > 0 ? "Mute browser player" : "Unmute browser player"}
+              onClick={toggleMute}
+              title={volume > 0 ? "Mute" : "Unmute"}
+              type="button"
+            >
+              {volume > 0 ? <Volume2 size={15} /> : <VolumeX size={15} />}
+            </button>
+            <div className="player-volume-slider">
+              <div aria-hidden="true" className="player-volume-rail">
+                <i style={{ width: `${volumePercent}%` }} />
+              </div>
+              <input
+                aria-label="Browser player volume"
+                aria-valuetext={`${volumePercent}%`}
+                max={100}
+                min={0}
+                onChange={(event) =>
+                  updateVolume(Number(event.currentTarget.value) / 100)
+                }
+                step={1}
+                type="range"
+                value={volumePercent}
+              />
+            </div>
+            <output aria-hidden="true">{volumePercent}%</output>
+          </div>
           {currentTrack && currentTrackUrl ? (
             <a
               aria-label={`Open current ${spotifyItemKind(currentTrack.uri)} in the Spotify app`}

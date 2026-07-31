@@ -895,7 +895,24 @@ details.column-config > summary > span {
   white-space: nowrap;
 }
 .track-table tr:hover td { background: rgba(255,255,255,0.025); }
+.track-table tr.current-track td {
+  background: rgba(183,247,47,.045);
+}
 .track-table td.track-title { color: var(--ink); font-weight: 620; }
+.now-playing-indicator {
+  border: 1px solid rgba(183,247,47,.28);
+  border-radius: 999px;
+  color: var(--green);
+  display: inline-block;
+  font-family: var(--font-mono), monospace;
+  font-size: 8px;
+  font-weight: 650;
+  letter-spacing: .05em;
+  margin-left: 8px;
+  padding: 3px 6px;
+  text-transform: uppercase;
+  vertical-align: 1px;
+}
 .track-table .metadata-code {
   color: inherit;
   font-family: var(--font-mono), monospace;
@@ -1119,6 +1136,90 @@ details.column-config > summary > span {
   gap: 8px;
   grid-template-columns: auto minmax(100px, 230px) auto;
 }
+.player-volume {
+  align-items: center;
+  color: var(--dim);
+  display: grid;
+  font-family: var(--font-mono), monospace;
+  font-size: 9px;
+  gap: 6px;
+  grid-template-columns: 28px minmax(64px, 110px) 32px;
+}
+.player-volume button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  height: 28px;
+  justify-content: center;
+  padding: 0;
+  width: 28px;
+}
+.player-volume button:hover { color: var(--ink); }
+.player-volume-slider {
+  height: 30px;
+  position: relative;
+  width: clamp(64px, 8vw, 110px);
+}
+.player-volume-rail {
+  background: rgba(255,255,255,.12);
+  border-radius: 999px;
+  height: 3px;
+  left: 0;
+  overflow: hidden;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.player-volume-rail i {
+  background: var(--green);
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+}
+.player-volume input {
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  height: 30px;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  position: absolute;
+  width: 100%;
+}
+.player-volume input::-webkit-slider-runnable-track {
+  background: transparent;
+  height: 4px;
+}
+.player-volume input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  background: var(--ink);
+  border: 2px solid var(--night);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(183,247,47,.4);
+  height: 13px;
+  margin-top: -4.5px;
+  width: 13px;
+}
+.player-volume input::-moz-range-track {
+  background: transparent;
+  height: 4px;
+}
+.player-volume input::-moz-range-progress { background: transparent; }
+.player-volume input::-moz-range-thumb {
+  background: var(--ink);
+  border: 2px solid var(--night);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(183,247,47,.4);
+  height: 9px;
+  width: 9px;
+}
 .player-seek {
   height: 30px;
   position: relative;
@@ -1204,6 +1305,10 @@ details.column-config > summary > span {
   .release-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .hero { grid-template-columns: 1fr 0.7fr; }
   .playlist-layout { grid-template-columns: 280px minmax(0, 1fr); }
+  .player-volume {
+    grid-template-columns: 28px minmax(64px, 90px);
+  }
+  .player-volume output { display: none; }
 }
 @media (min-width: 821px) {
   .playlist-main {
@@ -1391,8 +1496,9 @@ details.column-config > summary > span {
   .player-controls .player-toggle { flex-basis: 48px; height: 48px; width: 48px; }
   .player-status { display: none; }
   .player-status.has-progress {
-    display: flex;
+    display: grid;
     grid-column: 1 / -1;
+    grid-template-columns: minmax(0, 1fr) auto;
     justify-self: stretch;
     min-width: 0;
     width: 100%;
@@ -1404,6 +1510,12 @@ details.column-config > summary > span {
     width: 100%;
   }
   .player-progress > span:last-child { text-align: right; }
+  .player-volume {
+    grid-template-columns: 44px 64px;
+  }
+  .player-volume button { height: 44px; width: 44px; }
+  .player-volume-slider,
+  .player-volume input { height: 44px; }
   .player-seek { height: 44px; width: 100%; }
   .player-seek input { height: 44px; }
   .player-enable { font-size: 11px; min-height: 44px; padding: 10px 14px; }
@@ -1544,6 +1656,10 @@ details.column-config > summary > span {
     padding: 14px;
     position: relative;
   }
+  .track-table tr.current-track {
+    border-color: rgba(183,247,47,.34);
+    box-shadow: inset 3px 0 0 rgba(183,247,47,.72);
+  }
   .track-table td {
     border: 0;
     display: block;
@@ -1583,6 +1699,9 @@ details.column-config > summary > span {
     grid-column: 1 / -1;
     line-height: 1.35;
     padding-right: 48px;
+  }
+  .now-playing-indicator {
+    margin: 7px 0 0;
   }
   .track-table td[data-column="artist"],
   .track-table td[data-column="album"] { grid-column: 1 / -1; }
