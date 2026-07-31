@@ -539,7 +539,11 @@ details.column-config > summary > span {
   flex-direction: column;
   gap: 48px;
 }
-.release-month { min-width: 0; }
+.release-month {
+  contain-intrinsic-size: auto 520px;
+  content-visibility: auto;
+  min-width: 0;
+}
 .release-month-head {
   align-items: baseline;
   border-bottom: 1px solid var(--line);
@@ -578,6 +582,13 @@ details.column-config > summary > span {
   display: grid;
   gap: 26px 16px;
   grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+.release-render-progress {
+  color: var(--dim);
+  font-family: var(--font-mono), monospace;
+  font-size: 10px;
+  padding: 2px 0 12px;
+  text-align: center;
 }
 .release-card { min-width: 0; }
 .cover-wrap {

@@ -24,6 +24,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import {
+  startTransition,
   useCallback,
   useEffect,
   useMemo,
@@ -153,6 +154,8 @@ type TrackColumn = {
 const releaseMemoryCache = new Map<string, ReleaseScanSnapshot>();
 const EMPTY_VALUE = "\u2014";
 const COLUMN_STORAGE_KEY = "taditech-playlist-columns-v1";
+const INITIAL_RELEASE_RENDER_LIMIT = 96;
+const RELEASE_RENDER_BATCH_SIZE = 96;
 
 function freshReleaseSnapshot(snapshot?: ReleaseScanSnapshot) {
   return snapshot && releaseCacheIsFresh([snapshot], snapshot.complete)
@@ -1015,6 +1018,9 @@ function ReleasesView({ userId }: { userId: string }) {
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState("newest");
+  const [releaseRenderLimit, setReleaseRenderLimit] = useState(
+    INITIAL_RELEASE_RENDER_LIMIT,
+  );
   const scanController = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -1031,12 +1037,14 @@ function ReleasesView({ userId }: { userId: string }) {
       .then((snapshot) => {
         if (cancelled || !snapshot) return;
         releaseMemoryCache.set(userId, snapshot);
-        setReleases(snapshot.releases);
-        setArtistCount(snapshot.artistCount);
-        setScannedArtists(snapshot.scannedArtists);
-        setScanComplete(snapshot.complete);
-        setLastCheckedAt(snapshot.fetchedAt);
-        setRestoredFromCache(true);
+        startTransition(() => {
+          setReleases(snapshot.releases);
+          setArtistCount(snapshot.artistCount);
+          setScannedArtists(snapshot.scannedArtists);
+          setScanComplete(snapshot.complete);
+          setLastCheckedAt(snapshot.fetchedAt);
+          setRestoredFromCache(true);
+        });
       })
       .finally(() => {
         if (!cancelled) setRestoringCache(false);
@@ -1219,6 +1227,56 @@ function ReleasesView({ userId }: { userId: string }) {
     (count, group) => count + group.releases.length,
     0,
   );
+  const renderedReleaseGroups = useMemo(() => {
+    return releaseGroups.reduce<
+      Array<(typeof releaseGroups)[number] & { totalReleases: number }>
+    >((renderedGroups, group) => {
+      const renderedCount = renderedGroups.reduce(
+        (count, renderedGroup) => count + renderedGroup.releases.length,
+        0,
+      );
+      const remaining = releaseRenderLimit - renderedCount;
+      if (remaining <= 0) return renderedGroups;
+      const visibleReleases = group.releases.slice(0, remaining);
+      return [
+        ...renderedGroups,
+        {
+          ...group,
+          releases: visibleReleases,
+          totalReleases: group.releases.length,
+        },
+      ];
+    }, []);
+  }, [releaseGroups, releaseRenderLimit]);
+  const renderedReleaseCount = Math.min(releaseRenderLimit, visibleCount);
+
+  useEffect(() => {
+    if (renderedReleaseCount >= visibleCount) return;
+
+    const revealNextBatch = () => {
+      startTransition(() => {
+        setReleaseRenderLimit((current) =>
+          Math.min(current + RELEASE_RENDER_BATCH_SIZE, visibleCount),
+        );
+      });
+    };
+    const idleWindow = window as Window & {
+      cancelIdleCallback?: (handle: number) => void;
+      requestIdleCallback?: (
+        callback: () => void,
+        options?: { timeout: number },
+      ) => number;
+    };
+    const idleHandle = idleWindow.requestIdleCallback?.(revealNextBatch, {
+      timeout: 800,
+    });
+    if (idleHandle !== undefined) {
+      return () => idleWindow.cancelIdleCallback?.(idleHandle);
+    }
+    const timeoutHandle = window.setTimeout(revealNextBatch, 80);
+    return () => window.clearTimeout(timeoutHandle);
+  }, [renderedReleaseCount, visibleCount]);
+
   const hasProgress = scannedArtists > 0;
   const scanButtonLabel = restoringCache
     ? "Checking cache"
@@ -1425,7 +1483,7 @@ function ReleasesView({ userId }: { userId: string }) {
       )}
       {visibleCount > 0 && (
         <div className="release-months">
-          {releaseGroups.map((group, index) => {
+          {renderedReleaseGroups.map((group, index) => {
             const headingId = `release-month-${group.key}`;
             return (
               <section
@@ -1439,8 +1497,8 @@ function ReleasesView({ userId }: { userId: string }) {
                     <h2 id={headingId}>{group.label}</h2>
                   </div>
                   <span>
-                    {group.releases.length} release
-                    {group.releases.length === 1 ? "" : "s"}
+                    {group.totalReleases} release
+                    {group.totalReleases === 1 ? "" : "s"}
                   </span>
                 </header>
                 <div className="release-grid">
@@ -1451,6 +1509,11 @@ function ReleasesView({ userId }: { userId: string }) {
               </section>
             );
           })}
+          {renderedReleaseCount < visibleCount && (
+            <div className="release-render-progress" role="status">
+              Preparing {visibleCount - renderedReleaseCount} more cached releases…
+            </div>
+          )}
         </div>
       )}
       <p className="legal-note">

@@ -119,9 +119,10 @@ export function PlaybackProvider({
   children: ReactNode;
 }) {
   const playerRef = useRef<SpotifyPlayer | null>(null);
+  const [playerEnabled, setPlayerEnabled] = useState(false);
   const [deviceId, setDeviceId] = useState("");
   const deviceIdRef = useRef("");
-  const [connecting, setConnecting] = useState(authorized);
+  const [connecting, setConnecting] = useState(false);
   const [reconnectRequired, setReconnectRequired] = useState(!authorized);
   const [retryAvailable, setRetryAvailable] = useState(false);
   const [retryNonce, setRetryNonce] = useState(0);
@@ -195,6 +196,17 @@ export function PlaybackProvider({
       setRetryAvailable(false);
       clearPending();
       resetSeekState();
+      return;
+    }
+    if (!playerEnabled) {
+      setConnecting(false);
+      setReconnectRequired(false);
+      setRetryAvailable(false);
+      setActiveDeviceId("");
+      setState(null);
+      clearPending();
+      resetSeekState();
+      setError("");
       return;
     }
 
@@ -383,6 +395,7 @@ export function PlaybackProvider({
     authorized,
     clearPending,
     clearSeekDraft,
+    playerEnabled,
     resetSeekState,
     retryNonce,
     setActiveDeviceId,
@@ -471,7 +484,11 @@ export function PlaybackProvider({
   );
 
   const deviceReady =
-    authorized && !reconnectRequired && !connecting && Boolean(deviceId);
+    authorized &&
+    playerEnabled &&
+    !reconnectRequired &&
+    !connecting &&
+    Boolean(deviceId);
   const value = useMemo<PlaybackContextValue>(
     () => ({
       authorized: authorized && !reconnectRequired,
@@ -690,6 +707,8 @@ export function PlaybackProvider({
               {currentTrack?.name ||
                 (reconnectRequired
                   ? "Enable browser playback"
+                  : !playerEnabled
+                    ? "Browser playback is off"
                   : connecting
                     ? "Preparing your browser player"
                     : deviceReady
@@ -699,7 +718,10 @@ export function PlaybackProvider({
             <span aria-live={error ? "assertive" : "polite"} role={error ? "alert" : "status"}>
               {currentTrack
                 ? error || currentTrack.artists?.map((artist) => artist.name).join(", ")
-                : error || "Choose Play on any release or playlist track."}
+                : error ||
+                  (playerEnabled
+                    ? "Choose Play on any release or playlist track."
+                    : "Enable it when you want to play without slowing startup.")}
             </span>
           </div>
           {currentTrack && currentTrackUrl && (
@@ -718,6 +740,17 @@ export function PlaybackProvider({
           <a className="player-enable" href="/api/auth/login?reauthorize=1">
             Reconnect Spotify
           </a>
+        ) : !playerEnabled ? (
+          <button
+            className="player-enable"
+            onClick={() => {
+              setConnecting(true);
+              setPlayerEnabled(true);
+            }}
+            type="button"
+          >
+            Enable player
+          </button>
         ) : retryAvailable && !deviceReady ? (
           <button
             className="player-enable"
