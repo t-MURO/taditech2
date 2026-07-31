@@ -789,7 +789,8 @@ details.column-config > summary > span {
 }
 .mobile-table-tools { display: none; }
 .track-table {
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 12px;
   min-width: 100%;
   width: max-content;
@@ -841,10 +842,12 @@ details.column-config > summary > span {
 .track-table td {
   border-bottom: 1px solid rgba(255,255,255,0.06);
   color: var(--muted);
+  height: 58px;
   max-width: 220px;
   overflow: hidden;
   padding: 11px 10px;
   text-overflow: ellipsis;
+  vertical-align: middle;
   white-space: nowrap;
 }
 .track-table tr:hover td { background: rgba(255,255,255,0.025); }
@@ -872,13 +875,21 @@ details.column-config > summary > span {
   display: flex;
   justify-content: center;
 }
-.track-table .listen-column { cursor: default; text-align: right; }
+.track-table .listen-column {
+  cursor: default;
+  min-width: 78px;
+  text-align: left;
+  width: 78px;
+}
 .track-table td.track-actions {
+  max-width: none;
+  width: 78px;
+}
+.track-action-buttons {
   align-items: center;
   display: flex;
   gap: 6px;
-  justify-content: flex-end;
-  max-width: none;
+  justify-content: flex-start;
 }
 .track-actions button,
 .track-actions a {
@@ -1490,6 +1501,8 @@ details.column-config > summary > span {
     word-break: break-word;
   }
   .track-table td.album-cover-cell {
+    grid-column: 1;
+    grid-row: 1;
     max-width: none;
     width: auto;
   }
@@ -1498,10 +1511,12 @@ details.column-config > summary > span {
     width: 44px;
   }
   .track-table td.track-actions {
-    border-top: 1px solid var(--line);
-    grid-column: 1 / -1;
-    justify-content: flex-start;
-    padding-top: 12px;
+    border-top: 0;
+    grid-column: 2;
+    grid-row: 1;
+    height: auto;
+    padding: 0 48px 0 0;
+    width: auto;
   }
   .empty, .loading-state, .error-state { min-height: 210px; padding: 26px; }
   .toast {

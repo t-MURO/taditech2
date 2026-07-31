@@ -22,6 +22,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -284,6 +285,26 @@ function renderArtists(artists?: NormalizedSpotifyTrack["artists"]) {
 
 const TRACK_COLUMNS: TrackColumn[] = [
   {
+    id: "albumCover",
+    label: "Album cover",
+    group: "Essentials",
+    defaultVisible: true,
+    required: true,
+    className: "album-cover-cell",
+    render: (entry) => {
+      const cover = preferredSpotifyImage(entry.item.album?.images);
+      return cover ? (
+        <img
+          alt=""
+          className="album-cover"
+          decoding="async"
+          loading="lazy"
+          src={cover}
+        />
+      ) : EMPTY_VALUE;
+    },
+  },
+  {
     id: "position",
     label: "#",
     sortLabel: "Playlist position",
@@ -526,24 +547,6 @@ const TRACK_COLUMNS: TrackColumn[] = [
         .join(", ")
         .toLocaleLowerCase(),
     render: (entry) => renderArtists(entry.item.album?.artists),
-  },
-  {
-    id: "albumCover",
-    label: "Album cover",
-    group: "Album",
-    className: "album-cover-cell",
-    render: (entry) => {
-      const cover = preferredSpotifyImage(entry.item.album?.images);
-      return cover ? (
-        <img
-          alt=""
-          className="album-cover"
-          decoding="async"
-          loading="lazy"
-          src={cover}
-        />
-      ) : EMPTY_VALUE;
-    },
   },
   {
     id: "albumImageUrls",
@@ -2027,31 +2030,36 @@ function PlaylistsView() {
                   <thead>
                     <tr>
                       {visibleColumns.map((column) => (
-                        <th
-                          aria-sort={
-                            sortKey === column.id
-                              ? descending
-                                ? "descending"
-                                : "ascending"
-                              : undefined
-                          }
-                          data-column={column.id}
-                          key={column.id}
-                          scope="col"
-                        >
-                          {column.getSortValue ? (
-                            <button
-                              className="table-sort-button"
-                              onClick={() => sortBy(column.id)}
-                              type="button"
-                            >
-                              {column.label}
-                              {sortKey === column.id ? (descending ? " ↓" : " ↑") : ""}
-                            </button>
-                          ) : column.label}
-                        </th>
+                        <Fragment key={column.id}>
+                          <th
+                            aria-sort={
+                              sortKey === column.id
+                                ? descending
+                                  ? "descending"
+                                  : "ascending"
+                                : undefined
+                            }
+                            data-column={column.id}
+                            scope="col"
+                          >
+                            {column.getSortValue ? (
+                              <button
+                                className="table-sort-button"
+                                onClick={() => sortBy(column.id)}
+                                type="button"
+                              >
+                                {column.label}
+                                {sortKey === column.id ? (descending ? " ↓" : " ↑") : ""}
+                              </button>
+                            ) : column.label}
+                          </th>
+                          {column.id === "albumCover" && (
+                            <th className="listen-column" scope="col">
+                              Listen
+                            </th>
+                          )}
+                        </Fragment>
                       ))}
-                      <th className="listen-column" scope="col">Listen</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2069,49 +2077,57 @@ function PlaylistsView() {
                       return (
                       <tr key={entry.key}>
                         {visibleColumns.map((column) => (
-                          <td
-                            className={column.className}
-                            data-column={column.id}
-                            data-label={column.sortLabel ?? column.label}
-                            key={column.id}
-                          >
-                            {column.render(entry, index)}
-                          </td>
-                        ))}
-                        <td className="track-actions" data-label="Listen">
-                          <button
-                            aria-label={`Play ${entry.item.name} in this browser`}
-                            disabled={
-                              !canPlay ||
-                              !playback.deviceReady ||
-                              Boolean(playback.pendingKey)
-                            }
-                            onClick={() =>
-                              void playback.play({ uris: [entry.item.uri] }, playbackKey)
-                            }
-                            title={
-                              canPlay
-                                ? "Play in browser"
-                                : entry.item.is_playable === false
-                                  ? "Spotify reports this track as unavailable for playback"
-                                  : "Local and unavailable tracks cannot play in the browser"
-                            }
-                            type="button"
-                          >
-                            {playback.pendingKey === playbackKey
-                              ? <LoaderCircle className="spinner" size={13} />
-                              : <Play size={13} fill="currentColor" />}
-                          </button>
-                          {spotifyHref && (
-                            <a
-                              aria-label={`Open ${entry.item.name} in the Spotify app`}
-                              href={spotifyHref}
-                              title="Open in Spotify app"
+                          <Fragment key={column.id}>
+                            <td
+                              className={column.className}
+                              data-column={column.id}
+                              data-label={column.sortLabel ?? column.label}
                             >
-                              <ExternalLink size={13} />
-                            </a>
-                          )}
-                        </td>
+                              {column.render(entry, index)}
+                            </td>
+                            {column.id === "albumCover" && (
+                              <td className="track-actions" data-label="Listen">
+                                <div className="track-action-buttons">
+                                  <button
+                                    aria-label={`Play ${entry.item.name} in this browser`}
+                                    disabled={
+                                      !canPlay ||
+                                      !playback.deviceReady ||
+                                      Boolean(playback.pendingKey)
+                                    }
+                                    onClick={() =>
+                                      void playback.play(
+                                        { uris: [entry.item.uri] },
+                                        playbackKey,
+                                      )
+                                    }
+                                    title={
+                                      canPlay
+                                        ? "Play in browser"
+                                        : entry.item.is_playable === false
+                                          ? "Spotify reports this track as unavailable for playback"
+                                          : "Local and unavailable tracks cannot play in the browser"
+                                    }
+                                    type="button"
+                                  >
+                                    {playback.pendingKey === playbackKey
+                                      ? <LoaderCircle className="spinner" size={13} />
+                                      : <Play size={13} fill="currentColor" />}
+                                  </button>
+                                  {spotifyHref && (
+                                    <a
+                                      aria-label={`Open ${entry.item.name} in the Spotify app`}
+                                      href={spotifyHref}
+                                      title="Open in Spotify app"
+                                    >
+                                      <ExternalLink size={13} />
+                                    </a>
+                                  )}
+                                </div>
+                              </td>
+                            )}
+                          </Fragment>
+                        ))}
                       </tr>
                     )})}
                   </tbody>
