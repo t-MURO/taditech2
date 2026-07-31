@@ -1087,6 +1087,16 @@ details.column-config > summary > span {
   padding: 22px;
   width: min(430px, 100%);
 }
+.track-action-dialog.playlist-picker-dialog {
+  gap: 14px;
+  overflow: hidden;
+  padding: 18px;
+}
+.playlist-picker-dialog .track-action-playlist {
+  border-top: 0;
+  min-height: 0;
+  padding-top: 0;
+}
 .track-action-dialog-head {
   align-items: start;
   display: flex;
@@ -1220,6 +1230,114 @@ details.column-config > summary > span {
   min-height: 44px;
   padding: 0 12px;
   width: 100%;
+}
+.track-action-playlist label.track-action-playlist-search {
+  align-items: center;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--dim);
+  display: flex;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  gap: 9px;
+  letter-spacing: normal;
+  min-height: 40px;
+  padding: 0 11px;
+  text-transform: none;
+}
+.track-action-playlist-search:focus-within {
+  border-color: rgba(183,247,47,.48);
+}
+.track-action-playlist-search input {
+  background: transparent;
+  border: 0;
+  color: var(--ink);
+  font: inherit;
+  min-width: 0;
+  outline: 0;
+  padding: 0;
+  width: 100%;
+}
+.track-action-playlist-search input::placeholder { color: var(--dim); }
+.track-action-playlist-list {
+  background: rgba(0,0,0,.12);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  max-height: min(216px, 30dvh);
+  min-height: 54px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+  scrollbar-gutter: stable;
+}
+.track-action-playlist-list > button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: var(--ink);
+  cursor: pointer;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 34px minmax(0, 1fr) auto auto;
+  min-height: 44px;
+  padding: 5px 8px 5px 5px;
+  text-align: left;
+  width: 100%;
+}
+.track-action-playlist-list > button:hover {
+  background: rgba(255,255,255,.055);
+}
+.track-action-playlist-list > button.selected {
+  background: rgba(183,247,47,.1);
+  color: var(--green);
+}
+.track-action-playlist-list > button:disabled {
+  cursor: not-allowed;
+  opacity: .46;
+}
+.track-action-playlist-list img,
+.track-action-playlist-cover {
+  align-items: center;
+  background: var(--panel-2);
+  border-radius: 6px;
+  display: flex;
+  height: 34px;
+  justify-content: center;
+  object-fit: cover;
+  width: 34px;
+}
+.track-action-playlist-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.track-action-playlist-copy strong {
+  color: inherit;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.track-action-playlist-copy small {
+  color: var(--dim);
+  font-size: 9px;
+}
+.track-action-playlist-list em {
+  color: var(--muted);
+  font-family: var(--font-mono), monospace;
+  font-size: 8px;
+  font-style: normal;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+.track-action-playlist-empty {
+  color: var(--muted);
+  font-size: 11px;
+  padding: 16px 12px;
+  text-align: center;
 }
 .track-action-playlist .primary-button {
   justify-content: center;
@@ -1800,6 +1918,14 @@ details.column-config > summary > span {
   .toast { bottom: calc(190px + env(safe-area-inset-bottom)); }
 }
 @media (max-width: 600px) {
+  .track-action-backdrop { padding: 12px; }
+  .track-action-dialog.playlist-picker-dialog {
+    max-height: calc(100dvh - 24px);
+    padding: 16px;
+  }
+  .track-action-playlist-list {
+    max-height: min(190px, 28dvh);
+  }
   .landing, .main {
     padding-left: calc(16px + env(safe-area-inset-left));
     padding-right: calc(16px + env(safe-area-inset-right));

@@ -169,6 +169,8 @@ type TrackColumn = {
 const releaseMemoryCache = new Map<string, ReleaseScanSnapshot>();
 const EMPTY_VALUE = "\u2014";
 const COLUMN_STORAGE_KEY = "taditech-playlist-columns-v1";
+const RECENT_PLAYLIST_STORAGE_KEY = "taditech-recent-playlist-destinations-v1";
+const MAX_RECENT_PLAYLISTS = 12;
 const INITIAL_RELEASE_RENDER_LIMIT = 96;
 const RELEASE_RENDER_BATCH_SIZE = 96;
 const MAX_RELEASE_SELECTION = 20;
@@ -1960,6 +1962,9 @@ function PlaylistsView() {
   const [descending, setDescending] = useState(false);
   const [toast, setToast] = useState("");
   const [actionItem, setActionItem] = useState<PlaylistItem | null>(null);
+  const [actionPlaylistOnly, setActionPlaylistOnly] = useState(false);
+  const [actionPlaylistQuery, setActionPlaylistQuery] = useState("");
+  const [recentPlaylistIds, setRecentPlaylistIds] = useState<string[]>([]);
   const [songContextMenu, setSongContextMenu] = useState<{
     entry: PlaylistItem;
     x: number;
@@ -1980,6 +1985,23 @@ function PlaylistsView() {
       if (saved) setVisibleColumnIds(normalizeVisibleColumnIds(JSON.parse(saved)));
     } catch {
       // A blocked or malformed device preference should not block the playlist table.
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(
+        window.localStorage.getItem(RECENT_PLAYLIST_STORAGE_KEY) ?? "[]",
+      );
+      if (Array.isArray(saved)) {
+        setRecentPlaylistIds(
+          saved
+            .filter((id): id is string => typeof id === "string")
+            .slice(0, MAX_RECENT_PLAYLISTS),
+        );
+      }
+    } catch {
+      // Recent destinations are only a convenience; an unavailable preference is safe.
     }
   }, []);
 
@@ -2032,6 +2054,35 @@ function PlaylistsView() {
     selected &&
     !visiblePlaylists.some((playlist) => playlist.id === selected.id),
   );
+  const recentPlaylistIdSet = useMemo(
+    () => new Set(recentPlaylistIds),
+    [recentPlaylistIds],
+  );
+  const orderedActionPlaylists = useMemo(() => {
+    const recentRank = new Map(
+      recentPlaylistIds.map((playlistId, index) => [playlistId, index]),
+    );
+    return playlists
+      .map((playlist, index) => ({ playlist, index }))
+      .sort((left, right) => {
+        const leftRank = recentRank.get(left.playlist.id);
+        const rightRank = recentRank.get(right.playlist.id);
+        if (leftRank !== undefined || rightRank !== undefined) {
+          if (leftRank === undefined) return 1;
+          if (rightRank === undefined) return -1;
+          return leftRank - rightRank;
+        }
+        return left.index - right.index;
+      })
+      .map(({ playlist }) => playlist);
+  }, [playlists, recentPlaylistIds]);
+  const filteredActionPlaylists = useMemo(() => {
+    const needle = actionPlaylistQuery.trim().toLocaleLowerCase();
+    if (!needle) return orderedActionPlaylists;
+    return orderedActionPlaylists.filter((playlist) =>
+      playlist.name.toLocaleLowerCase().includes(needle),
+    );
+  }, [actionPlaylistQuery, orderedActionPlaylists]);
 
   const loadItems = useCallback(async (playlist: Pick<Playlist, "id">) => {
     itemLoadController.current?.abort();
@@ -2172,11 +2223,39 @@ function PlaylistsView() {
     );
   };
 
-  const openTrackActions = (entry: PlaylistItem) => {
-    setDestinationPlaylistId(selected?.id ?? playlists[0]?.id ?? "");
+  const openTrackActions = (
+    entry: PlaylistItem,
+    playlistOnly = false,
+  ) => {
+    const recentDestination = recentPlaylistIds.find((playlistId) =>
+      playlists.some((playlist) => playlist.id === playlistId),
+    );
+    setDestinationPlaylistId(
+      recentDestination ?? selected?.id ?? playlists[0]?.id ?? "",
+    );
+    setActionPlaylistOnly(playlistOnly);
+    setActionPlaylistQuery("");
     setActionPending("");
     setActionError("");
     setActionItem(entry);
+  };
+
+  const rememberPlaylistDestination = (playlistId: string) => {
+    setRecentPlaylistIds((current) => {
+      const next = [
+        playlistId,
+        ...current.filter((id) => id !== playlistId),
+      ].slice(0, MAX_RECENT_PLAYLISTS);
+      try {
+        window.localStorage.setItem(
+          RECENT_PLAYLIST_STORAGE_KEY,
+          JSON.stringify(next),
+        );
+      } catch {
+        // Keep the in-memory order when local storage is unavailable.
+      }
+      return next;
+    });
   };
 
   const addContextSongToQueue = async (entry: PlaylistItem) => {
@@ -2243,6 +2322,7 @@ function PlaylistsView() {
           },
         ]);
       }
+      rememberPlaylistDestination(destinationPlaylistId);
       showToast(
         `Added “${actionItem.item.name}” to ${destination?.name ?? "the playlist"}.`,
       );
@@ -2904,7 +2984,7 @@ function PlaylistsView() {
             disabled={!contextCanUseTrack || Boolean(playback.pendingKey)}
             onClick={() => {
               setSongContextMenu(null);
-              openTrackActions(contextEntry);
+              openTrackActions(contextEntry, true);
             }}
             role="menuitem"
             type="button"
@@ -2937,12 +3017,16 @@ function PlaylistsView() {
           <section
             aria-labelledby="track-action-title"
             aria-modal="true"
-            className="track-action-dialog"
+            className={`track-action-dialog ${
+              actionPlaylistOnly ? "playlist-picker-dialog" : ""
+            }`}
             role="dialog"
           >
             <header className="track-action-dialog-head">
               <div>
-                <span>Song actions</span>
+                <span>
+                  {actionPlaylistOnly ? "Add to playlist" : "Song actions"}
+                </span>
                 <h2 id="track-action-title">{actionItem.item.name}</h2>
                 <p>
                   {actionItem.item.artists?.map((artist) => artist.name).join(", ") ||
@@ -2958,38 +3042,102 @@ function PlaylistsView() {
                 <X size={17} />
               </button>
             </header>
-            <button
-              className="track-action-primary"
-              disabled={Boolean(actionPending) || !playback.authorized}
-              onClick={() => void addActionItemToQueue()}
-              type="button"
-            >
-              {actionPending === "queue"
-                ? <LoaderCircle className="spinner" size={17} />
-                : <ListEnd size={17} />}
-              <span>
-                <strong>Add to queue</strong>
-                <small>Play it next on your active Spotify player</small>
-              </span>
-            </button>
+            {!actionPlaylistOnly && (
+              <button
+                className="track-action-primary"
+                disabled={Boolean(actionPending) || !playback.authorized}
+                onClick={() => void addActionItemToQueue()}
+                type="button"
+              >
+                {actionPending === "queue"
+                  ? <LoaderCircle className="spinner" size={17} />
+                  : <ListEnd size={17} />}
+                <span>
+                  <strong>Add to queue</strong>
+                  <small>Play it next on your active Spotify player</small>
+                </span>
+              </button>
+            )}
             <div className="track-action-playlist">
-              <label htmlFor="track-action-playlist">
+              <label htmlFor="track-action-playlist-search">
                 Add to a playlist
               </label>
-              <select
-                disabled={Boolean(actionPending)}
-                id="track-action-playlist"
-                onChange={(event) =>
-                  setDestinationPlaylistId(event.target.value)
-                }
-                value={destinationPlaylistId}
+              <label className="track-action-playlist-search">
+                <Search aria-hidden="true" size={14} />
+                <input
+                  autoFocus={actionPlaylistOnly}
+                  disabled={Boolean(actionPending)}
+                  id="track-action-playlist-search"
+                  onChange={(event) => {
+                    const nextQuery = event.target.value;
+                    const needle = nextQuery.trim().toLocaleLowerCase();
+                    const nextMatches = needle
+                      ? orderedActionPlaylists.filter((playlist) =>
+                          playlist.name.toLocaleLowerCase().includes(needle),
+                        )
+                      : orderedActionPlaylists;
+                    setActionPlaylistQuery(nextQuery);
+                    if (
+                      !nextMatches.some(
+                        (playlist) => playlist.id === destinationPlaylistId,
+                      )
+                    ) {
+                      setDestinationPlaylistId(nextMatches[0]?.id ?? "");
+                    }
+                  }}
+                  placeholder="Search playlists"
+                  value={actionPlaylistQuery}
+                />
+              </label>
+              <div
+                aria-label="Destination playlist"
+                className="track-action-playlist-list"
+                role="listbox"
               >
-                {playlists.map((playlist) => (
-                  <option key={playlist.id} value={playlist.id}>
-                    {playlist.name}
-                  </option>
-                ))}
-              </select>
+                {filteredActionPlaylists.length === 0 ? (
+                  <div className="track-action-playlist-empty" role="status">
+                    No playlists match “{actionPlaylistQuery.trim()}”.
+                  </div>
+                ) : (
+                  filteredActionPlaylists.map((playlist) => {
+                    const coverUrl = preferredSpotifyImage(playlist.images);
+                    const isSelected =
+                      playlist.id === destinationPlaylistId;
+                    return (
+                      <button
+                        aria-selected={isSelected}
+                        className={isSelected ? "selected" : ""}
+                        disabled={Boolean(actionPending)}
+                        key={playlist.id}
+                        onClick={() =>
+                          setDestinationPlaylistId(playlist.id)
+                        }
+                        role="option"
+                        type="button"
+                      >
+                        {coverUrl ? (
+                          <img alt="" src={coverUrl} />
+                        ) : (
+                          <span className="track-action-playlist-cover">
+                            <ListMusic size={16} />
+                          </span>
+                        )}
+                        <span className="track-action-playlist-copy">
+                          <strong>{playlist.name}</strong>
+                          <small>
+                            {playlist.itemCount} item
+                            {playlist.itemCount === 1 ? "" : "s"}
+                          </small>
+                        </span>
+                        {recentPlaylistIdSet.has(playlist.id) && (
+                          <em>Recent</em>
+                        )}
+                        {isSelected && <Check size={15} />}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
               <button
                 className="primary-button"
                 disabled={!destinationPlaylistId || Boolean(actionPending)}
