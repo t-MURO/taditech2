@@ -174,6 +174,7 @@ const EMPTY_VALUE = "\u2014";
 const COLUMN_STORAGE_KEY = "taditech-playlist-columns-v1";
 const RECENT_PLAYLIST_STORAGE_KEY = "taditech-recent-playlist-destinations-v1";
 const MAX_RECENT_PLAYLISTS = 12;
+const PLAYLIST_SEARCH_THRESHOLD = 10;
 const INITIAL_RELEASE_RENDER_LIMIT = 48;
 const RELEASE_RENDER_BATCH_SIZE = 48;
 const MAX_RELEASE_SELECTION = 20;
@@ -1141,6 +1142,7 @@ function ReleasesView({ userId }: { userId: string }) {
   const [bulkPlaylists, setBulkPlaylists] = useState<Playlist[]>([]);
   const [bulkPlaylistsLoading, setBulkPlaylistsLoading] = useState(false);
   const [bulkDestinationId, setBulkDestinationId] = useState("");
+  const [bulkPlaylistQuery, setBulkPlaylistQuery] = useState("");
   const [recentPlaylistIds, setRecentPlaylistIds] = useState<string[]>([]);
   const [releaseContextMenu, setReleaseContextMenu] = useState<{
     release: Release;
@@ -1702,6 +1704,7 @@ function ReleasesView({ userId }: { userId: string }) {
   const openBulkPlaylistDialog = async () => {
     if (bulkPending || selectedReleaseIds.size === 0) return;
     setBulkPlaylistOpen(true);
+    setBulkPlaylistQuery("");
     setSelectionError("");
     if (bulkPlaylists.length > 0 || bulkPlaylistsLoading) return;
     setBulkPlaylistsLoading(true);
@@ -1803,6 +1806,13 @@ function ReleasesView({ userId }: { userId: string }) {
       playlist.name.toLocaleLowerCase().includes(needle),
     );
   }, [contextPlaylistQuery, orderedContextPlaylists]);
+  const filteredBulkPlaylists = useMemo(() => {
+    const needle = bulkPlaylistQuery.trim().toLocaleLowerCase();
+    if (!needle) return orderedContextPlaylists;
+    return orderedContextPlaylists.filter((playlist) =>
+      playlist.name.toLocaleLowerCase().includes(needle),
+    );
+  }, [bulkPlaylistQuery, orderedContextPlaylists]);
 
   const releaseGroups = useMemo(() => {
     const needle = query.toLowerCase();
@@ -2368,6 +2378,38 @@ function ReleasesView({ userId }: { userId: string }) {
               <label htmlFor="release-destination-playlist">
                 Destination playlist
               </label>
+              {!bulkPlaylistsLoading &&
+                bulkPlaylists.length > PLAYLIST_SEARCH_THRESHOLD && (
+                  <label className="track-action-playlist-search">
+                    <Search aria-hidden="true" size={14} />
+                    <input
+                      disabled={Boolean(bulkPending)}
+                      onChange={(event) => {
+                        const nextQuery = event.target.value;
+                        const needle =
+                          nextQuery.trim().toLocaleLowerCase();
+                        const nextMatches = needle
+                          ? orderedContextPlaylists.filter((playlist) =>
+                              playlist.name
+                                .toLocaleLowerCase()
+                                .includes(needle),
+                            )
+                          : orderedContextPlaylists;
+                        setBulkPlaylistQuery(nextQuery);
+                        if (
+                          !nextMatches.some(
+                            (playlist) =>
+                              playlist.id === bulkDestinationId,
+                          )
+                        ) {
+                          setBulkDestinationId(nextMatches[0]?.id ?? "");
+                        }
+                      }}
+                      placeholder="Search playlists"
+                      value={bulkPlaylistQuery}
+                    />
+                  </label>
+                )}
               {bulkPlaylistsLoading ? (
                 <div className="release-playlist-loading" role="status">
                   <LoaderCircle className="spinner" size={16} />
@@ -2377,16 +2419,23 @@ function ReleasesView({ userId }: { userId: string }) {
                 <div className="release-playlist-loading" role="status">
                   No owned or collaborative playlists were found.
                 </div>
+              ) : filteredBulkPlaylists.length === 0 ? (
+                <div className="release-playlist-loading" role="status">
+                  No playlists match “{bulkPlaylistQuery.trim()}”.
+                </div>
               ) : (
                 <select
-                  disabled={Boolean(bulkPending) || bulkPlaylists.length === 0}
+                  disabled={
+                    Boolean(bulkPending) ||
+                    filteredBulkPlaylists.length === 0
+                  }
                   id="release-destination-playlist"
                   onChange={(event) =>
                     setBulkDestinationId(event.target.value)
                   }
                   value={bulkDestinationId}
                 >
-                  {bulkPlaylists.map((playlist) => (
+                  {filteredBulkPlaylists.map((playlist) => (
                     <option key={playlist.id} value={playlist.id}>
                       {playlist.name}
                     </option>
@@ -2457,18 +2506,20 @@ function ReleasesView({ userId }: { userId: string }) {
                   <span>Add every track</span>
                 </div>
               </div>
-              <label className="song-context-search">
-                <Search aria-hidden="true" size={14} />
-                <input
-                  autoFocus
-                  disabled={Boolean(contextPending)}
-                  onChange={(event) =>
-                    setContextPlaylistQuery(event.target.value)
-                  }
-                  placeholder="Search playlists"
-                  value={contextPlaylistQuery}
-                />
-              </label>
+              {bulkPlaylists.length > PLAYLIST_SEARCH_THRESHOLD && (
+                <label className="song-context-search">
+                  <Search aria-hidden="true" size={14} />
+                  <input
+                    autoFocus
+                    disabled={Boolean(contextPending)}
+                    onChange={(event) =>
+                      setContextPlaylistQuery(event.target.value)
+                    }
+                    placeholder="Search playlists"
+                    value={contextPlaylistQuery}
+                  />
+                </label>
+              )}
               {contextError && (
                 <p className="song-context-error" role="alert">
                   {contextError}
@@ -3710,18 +3761,20 @@ function PlaylistsView() {
                   <span>Add to playlist</span>
                 </div>
               </div>
-              <label className="song-context-search">
-                <Search aria-hidden="true" size={14} />
-                <input
-                  autoFocus
-                  disabled={Boolean(contextPlaylistPendingId)}
-                  onChange={(event) =>
-                    setContextPlaylistQuery(event.target.value)
-                  }
-                  placeholder="Search playlists"
-                  value={contextPlaylistQuery}
-                />
-              </label>
+              {playlists.length > PLAYLIST_SEARCH_THRESHOLD && (
+                <label className="song-context-search">
+                  <Search aria-hidden="true" size={14} />
+                  <input
+                    autoFocus
+                    disabled={Boolean(contextPlaylistPendingId)}
+                    onChange={(event) =>
+                      setContextPlaylistQuery(event.target.value)
+                    }
+                    placeholder="Search playlists"
+                    value={contextPlaylistQuery}
+                  />
+                </label>
+              )}
               {contextPlaylistError && (
                 <p className="song-context-error" role="alert">
                   {contextPlaylistError}
@@ -3898,35 +3951,46 @@ function PlaylistsView() {
               </span>
             </button>
             <div className="track-action-playlist">
-              <label htmlFor="track-action-playlist-search">
+              <label
+                htmlFor={
+                  playlists.length > PLAYLIST_SEARCH_THRESHOLD
+                    ? "track-action-playlist-search"
+                    : undefined
+                }
+              >
                 Add to a playlist
               </label>
-              <label className="track-action-playlist-search">
-                <Search aria-hidden="true" size={14} />
-                <input
-                  disabled={Boolean(actionPending)}
-                  id="track-action-playlist-search"
-                  onChange={(event) => {
-                    const nextQuery = event.target.value;
-                    const needle = nextQuery.trim().toLocaleLowerCase();
-                    const nextMatches = needle
-                      ? orderedActionPlaylists.filter((playlist) =>
-                          playlist.name.toLocaleLowerCase().includes(needle),
+              {playlists.length > PLAYLIST_SEARCH_THRESHOLD && (
+                <label className="track-action-playlist-search">
+                  <Search aria-hidden="true" size={14} />
+                  <input
+                    disabled={Boolean(actionPending)}
+                    id="track-action-playlist-search"
+                    onChange={(event) => {
+                      const nextQuery = event.target.value;
+                      const needle = nextQuery.trim().toLocaleLowerCase();
+                      const nextMatches = needle
+                        ? orderedActionPlaylists.filter((playlist) =>
+                            playlist.name
+                              .toLocaleLowerCase()
+                              .includes(needle),
+                          )
+                        : orderedActionPlaylists;
+                      setActionPlaylistQuery(nextQuery);
+                      if (
+                        !nextMatches.some(
+                          (playlist) =>
+                            playlist.id === destinationPlaylistId,
                         )
-                      : orderedActionPlaylists;
-                    setActionPlaylistQuery(nextQuery);
-                    if (
-                      !nextMatches.some(
-                        (playlist) => playlist.id === destinationPlaylistId,
-                      )
-                    ) {
-                      setDestinationPlaylistId(nextMatches[0]?.id ?? "");
-                    }
-                  }}
-                  placeholder="Search playlists"
-                  value={actionPlaylistQuery}
-                />
-              </label>
+                      ) {
+                        setDestinationPlaylistId(nextMatches[0]?.id ?? "");
+                      }
+                    }}
+                    placeholder="Search playlists"
+                    value={actionPlaylistQuery}
+                  />
+                </label>
+              )}
               <div
                 aria-label="Destination playlist"
                 className="track-action-playlist-list"
