@@ -96,12 +96,14 @@ let sdkPromise: Promise<SpotifyNamespace> | null = null;
 let tokenPromise: Promise<string> | null = null;
 
 class PlaybackClientError extends Error {
+  code?: string;
   reconnect: boolean;
 
-  constructor(message: string, reconnect = false) {
+  constructor(message: string, reconnect = false, code?: string) {
     super(message);
     this.name = "PlaybackClientError";
     this.reconnect = reconnect;
+    this.code = code;
   }
 }
 
@@ -453,6 +455,17 @@ export function PlaybackProvider({
         }
       } catch (playError) {
         clearPending();
+        if (
+          playError instanceof PlaybackClientError &&
+          playError.code === "playback_device_unavailable"
+        ) {
+          setActiveDeviceId("");
+          setState(null);
+          setConnecting(true);
+          setRetryAvailable(false);
+          resetSeekState();
+          setRetryNonce((current) => current + 1);
+        }
         if (playError instanceof PlaybackClientError && playError.reconnect) {
           setActiveDeviceId("");
           setState(null);
@@ -988,7 +1001,7 @@ async function requestPlaybackToken() {
 }
 
 async function errorFromResponse(response: Response, fallback: string) {
-  let body: { error?: string; reconnect?: boolean } = {};
+  let body: { code?: string; error?: string; reconnect?: boolean } = {};
   try {
     body = (await response.json()) as typeof body;
   } catch {
@@ -997,6 +1010,7 @@ async function errorFromResponse(response: Response, fallback: string) {
   return new PlaybackClientError(
     body.error || fallback,
     Boolean(body.reconnect) || response.status === 401,
+    body.code,
   );
 }
 

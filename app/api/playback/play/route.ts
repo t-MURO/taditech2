@@ -17,6 +17,7 @@ type PlaybackRequest = {
 const DEVICE_ID = /^[a-zA-Z0-9_-]{8,128}$/;
 const TRACK_URI = /^spotify:track:[a-zA-Z0-9]{22}$/;
 const CONTEXT_URI = /^spotify:(album|artist|playlist):[a-zA-Z0-9]{22}$/;
+const DEVICE_REGISTRATION_RETRY_DELAYS_MS = [250, 500, 1_000];
 
 export async function PUT(request: Request) {
   try {
@@ -98,13 +99,23 @@ export async function PUT(request: Request) {
           position_ms: 0,
         }
       : { uris: body.uris, position_ms: 0 };
-    const play = await spotifyFetch(
-      `/me/player/play?device_id=${encodeURIComponent(body.deviceId)}`,
-      {
+    const playUrl = `/me/player/play?device_id=${encodeURIComponent(body.deviceId)}`;
+    const serializedPlaybackBody = JSON.stringify(playbackBody);
+    let play = await spotifyFetch(playUrl, {
+      method: "PUT",
+      body: serializedPlaybackBody,
+      signal: request.signal,
+    });
+    for (const retryDelay of DEVICE_REGISTRATION_RETRY_DELAYS_MS) {
+      if (play.status !== 404) break;
+      await play.body?.cancel();
+      await delay(retryDelay, request.signal);
+      play = await spotifyFetch(playUrl, {
         method: "PUT",
-        body: JSON.stringify(playbackBody),
-      },
-    );
+        body: serializedPlaybackBody,
+        signal: request.signal,
+      });
+    }
     if (!play.ok) {
       throw await playbackError(play);
     }
@@ -125,5 +136,34 @@ async function playbackError(response: Response) {
   } catch {
     // Keep the user-friendly fallback.
   }
+  if (response.status === 404) {
+    return new SpotifyError(
+      "Spotify could not see this browser player yet. It is reconnecting; try Play again in a moment.",
+      409,
+      undefined,
+      "playback_device_unavailable",
+    );
+  }
   return new SpotifyError(message, response.status);
+}
+
+function delay(ms: number, signal: AbortSignal) {
+  if (signal.aborted) {
+    return Promise.reject(
+      signal.reason ?? new DOMException("Playback was cancelled.", "AbortError"),
+    );
+  }
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", handleAbort);
+      resolve();
+    }, ms);
+    const handleAbort = () => {
+      clearTimeout(timer);
+      reject(
+        signal.reason ?? new DOMException("Playback was cancelled.", "AbortError"),
+      );
+    };
+    signal.addEventListener("abort", handleAbort, { once: true });
+  });
 }
