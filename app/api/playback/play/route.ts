@@ -10,6 +10,7 @@ export const dynamic = "force-dynamic";
 type PlaybackRequest = {
   deviceId?: string;
   contextUri?: string;
+  offsetPosition?: number;
   offsetUri?: string;
   uris?: string[];
 };
@@ -73,13 +74,31 @@ export async function PUT(request: Request) {
     if (body.offsetUri && !TRACK_URI.test(body.offsetUri)) {
       return Response.json({ error: "This starting track is invalid." }, { status: 400 });
     }
-    if (body.offsetUri && !body.contextUri) {
+    if (
+      body.offsetPosition !== undefined &&
+      (!Number.isInteger(body.offsetPosition) || body.offsetPosition < 0)
+    ) {
+      return Response.json(
+        { error: "This starting position is invalid." },
+        { status: 400 },
+      );
+    }
+    if (body.offsetUri && body.offsetPosition !== undefined) {
+      return Response.json(
+        { error: "Choose either a starting track or a starting position." },
+        { status: 400 },
+      );
+    }
+    if ((body.offsetUri || body.offsetPosition !== undefined) && !body.contextUri) {
       return Response.json(
         { error: "A starting track requires an album or playlist context." },
         { status: 400 },
       );
     }
-    if (body.offsetUri && body.contextUri?.startsWith("spotify:artist:")) {
+    if (
+      (body.offsetUri || body.offsetPosition !== undefined) &&
+      body.contextUri?.startsWith("spotify:artist:")
+    ) {
       return Response.json(
         { error: "Artist playback cannot start from a specific track." },
         { status: 400 },
@@ -95,7 +114,11 @@ export async function PUT(request: Request) {
     const playbackBody = body.contextUri
       ? {
           context_uri: body.contextUri,
-          ...(body.offsetUri ? { offset: { uri: body.offsetUri } } : {}),
+          ...(body.offsetUri
+            ? { offset: { uri: body.offsetUri } }
+            : body.offsetPosition !== undefined
+              ? { offset: { position: body.offsetPosition } }
+              : {}),
           position_ms: 0,
         }
       : { uris: body.uris, position_ms: 0 };

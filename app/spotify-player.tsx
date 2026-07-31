@@ -53,7 +53,11 @@ type SpotifyState = {
   paused: boolean;
   position: number;
   duration: number;
-  disallows?: { seeking?: boolean };
+  disallows?: {
+    seeking?: boolean;
+    skipping_next?: boolean;
+    skipping_prev?: boolean;
+  };
   track_window: { current_track: SpotifyTrack };
 };
 type SpotifyPlayer = {
@@ -61,11 +65,8 @@ type SpotifyPlayer = {
   activateElement(): Promise<void>;
   connect(): Promise<boolean>;
   disconnect(): void;
-  nextTrack(): Promise<void>;
-  previousTrack(): Promise<void>;
   seek(positionMs: number): Promise<void>;
   setVolume(volume: number): Promise<void>;
-  togglePlay(): Promise<void>;
 };
 type SpotifyNamespace = {
   Player: new (options: {
@@ -85,9 +86,11 @@ declare global {
 
 type PlayTarget = {
   contextUri?: string;
+  offsetPosition?: number;
   offsetUri?: string;
   uris?: string[];
 };
+type PlaybackControl = "next" | "pause" | "play" | "previous";
 type PlaybackContextValue = {
   authorized: boolean;
   currentTrackUri: string;
@@ -284,7 +287,7 @@ export function PlaybackProvider({
         localPlayer = new Spotify.Player({
           name: "Tadi Tech Browser Player",
           volume: volumeRef.current,
-          enableMediaSession: true,
+          enableMediaSession: false,
           getOAuthToken: (callback) => {
             void fetchPlaybackToken()
               .then((token) => {
@@ -797,19 +800,22 @@ export function PlaybackProvider({
     Boolean(state.disallows?.seeking) ||
     Boolean(pendingKey);
 
-  const runControl = async (control: "previous" | "toggle" | "next") => {
-    const player = playerRef.current;
+  const runControl = useCallback(async (control: PlaybackControl) => {
     if (
-      !player ||
       !deviceReady ||
+      !deviceId ||
       pendingCommandRef.current ||
       seekDraftRef.current !== null
     ) {
       return;
     }
     const commandKey = `control:${control}`;
-    const toggledPausedState =
-      control === "toggle" ? !stateRef.current?.paused : undefined;
+    const pausedState =
+      control === "pause"
+        ? true
+        : control === "play"
+          ? false
+          : undefined;
     const commandController = new AbortController();
     commandAbortRef.current = commandController;
     const commandTimeout = window.setTimeout(
@@ -821,21 +827,25 @@ export function PlaybackProvider({
     setPendingKey(commandKey);
     setError("");
     try {
-      await abortable(player.activateElement(), commandController.signal);
-      const command =
-        control === "previous"
-          ? player.previousTrack()
-          : control === "next"
-            ? player.nextTrack()
-            : player.togglePlay();
-      await abortable(command, commandController.signal);
-      if (control === "toggle" && toggledPausedState !== undefined) {
+      const response = await fetch("/api/playback/control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: control, deviceId }),
+        signal: commandController.signal,
+      });
+      if (!response.ok) {
+        throw await errorFromResponse(
+          response,
+          "Spotify could not apply this playback control.",
+        );
+      }
+      if (pausedState !== undefined) {
         const now = Date.now();
         setState((current) => {
           if (!current) return current;
           const nextState = {
             ...current,
-            paused: toggledPausedState,
+            paused: pausedState,
             position: playbackElapsed(
               current.position,
               current.duration,
@@ -851,6 +861,28 @@ export function PlaybackProvider({
         setClock(now);
       }
     } catch (controlError) {
+      if (
+        controlError instanceof PlaybackClientError &&
+        controlError.code === "playback_device_unavailable"
+      ) {
+        setActiveDeviceId("");
+        setState(null);
+        setConnecting(true);
+        setRetryAvailable(false);
+        resetSeekState();
+        setRetryNonce((current) => current + 1);
+      }
+      if (
+        controlError instanceof PlaybackClientError &&
+        controlError.reconnect
+      ) {
+        setActiveDeviceId("");
+        setState(null);
+        setConnecting(false);
+        setReconnectRequired(true);
+        setRetryAvailable(false);
+        resetSeekState();
+      }
       setError(
         isAbortError(controlError)
           ? "Spotify took too long to respond. Try that control again."
@@ -865,7 +897,67 @@ export function PlaybackProvider({
         commandAbortRef.current = null;
       }
     }
-  };
+  }, [
+    clearPending,
+    deviceId,
+    deviceReady,
+    observedAt,
+    resetSeekState,
+    setActiveDeviceId,
+  ]);
+
+  useEffect(() => {
+    if (!("mediaSession" in navigator)) return;
+    const mediaSession = navigator.mediaSession;
+    const handlers: Array<[MediaSessionAction, () => void]> = [
+      ["play", () => void runControl("play")],
+      ["pause", () => void runControl("pause")],
+      ["previoustrack", () => void runControl("previous")],
+      ["nexttrack", () => void runControl("next")],
+    ];
+    for (const [action, handler] of handlers) {
+      try {
+        mediaSession.setActionHandler(action, handler);
+      } catch {
+        // Some browsers expose Media Session but not every action.
+      }
+    }
+    return () => {
+      for (const [action] of handlers) {
+        try {
+          mediaSession.setActionHandler(action, null);
+        } catch {
+          // Ignore unsupported actions during cleanup.
+        }
+      }
+    };
+  }, [runControl]);
+
+  useEffect(() => {
+    if (!("mediaSession" in navigator)) return;
+    const mediaSession = navigator.mediaSession;
+    mediaSession.playbackState = currentTrack
+      ? state?.paused
+        ? "paused"
+        : "playing"
+      : "none";
+    if (!currentTrack) {
+      mediaSession.metadata = null;
+      return;
+    }
+    if (!("MediaMetadata" in window)) return;
+    mediaSession.metadata = new MediaMetadata({
+      title: currentTrack.name,
+      artist: currentTrackArtists,
+      album: currentTrack.album?.name ?? "",
+      artwork: (currentTrack.album?.images ?? []).map((image) => ({
+        src: image.url,
+        ...(image.width && image.height
+          ? { sizes: `${image.width}x${image.height}` }
+          : {}),
+      })),
+    });
+  }, [currentTrack, currentTrackArtists, state?.paused]);
 
   return (
     <PlaybackContext.Provider value={value}>
@@ -942,6 +1034,7 @@ export function PlaybackProvider({
               disabled={
                 !deviceReady ||
                 !currentTrack ||
+                Boolean(state?.disallows?.skipping_prev) ||
                 Boolean(pendingKey) ||
                 seekDraft !== null
               }
@@ -959,7 +1052,9 @@ export function PlaybackProvider({
                 Boolean(pendingKey) ||
                 seekDraft !== null
               }
-              onClick={() => void runControl("toggle")}
+              onClick={() =>
+                void runControl(state?.paused ? "play" : "pause")
+              }
               title={state?.paused ? "Resume playback" : "Pause playback"}
               type="button"
             >
@@ -974,6 +1069,7 @@ export function PlaybackProvider({
               disabled={
                 !deviceReady ||
                 !currentTrack ||
+                Boolean(state?.disallows?.skipping_next) ||
                 Boolean(pendingKey) ||
                 seekDraft !== null
               }

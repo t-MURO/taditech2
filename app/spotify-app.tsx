@@ -2160,6 +2160,18 @@ function PlaylistsView() {
     window.setTimeout(() => setToast(""), 3200);
   }, []);
 
+  const playPlaylistEntry = (entry: PlaylistItem, key: string) => {
+    void playback.play(
+      selected
+        ? {
+            contextUri: `spotify:playlist:${selected.id}`,
+            offsetPosition: entry.position,
+          }
+        : { uris: [entry.item.uri] },
+      key,
+    );
+  };
+
   const openTrackActions = (entry: PlaylistItem) => {
     setDestinationPlaylistId(selected?.id ?? playlists[0]?.id ?? "");
     setActionPending("");
@@ -2779,10 +2791,7 @@ function PlaylistsView() {
                                       Boolean(playback.pendingKey)
                                     }
                                     onClick={() =>
-                                      void playback.play(
-                                        { uris: [entry.item.uri] },
-                                        playbackKey,
-                                      )
+                                      playPlaylistEntry(entry, playbackKey)
                                     }
                                     title={
                                       canPlay
@@ -2867,8 +2876,8 @@ function PlaylistsView() {
             }
             onClick={() => {
               setSongContextMenu(null);
-              void playback.play(
-                { uris: [contextEntry.item.uri] },
+              playPlaylistEntry(
+                contextEntry,
                 `context-play:${contextEntry.key}`,
               );
             }}
