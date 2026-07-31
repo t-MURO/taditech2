@@ -612,8 +612,8 @@ details.column-config > summary > span {
 }
 .release-action-buttons button,
 .release-action-buttons a,
-.track-actions button,
-.track-actions a {
+.track-action-buttons button,
+.track-action-buttons a {
   align-items: center;
   background: rgba(255,255,255,0.055);
   border: 1px solid var(--line);
@@ -634,12 +634,12 @@ details.column-config > summary > span {
 }
 .release-action-buttons button:hover,
 .release-action-buttons a:hover,
-.track-actions button:hover,
-.track-actions a:hover {
+.track-action-buttons button:hover,
+.track-action-buttons a:hover {
   border-color: rgba(255,255,255,.32);
 }
 .release-action-buttons button:disabled,
-.track-actions button:disabled {
+.track-action-buttons button:disabled {
   cursor: not-allowed;
   opacity: .35;
 }
@@ -890,9 +890,11 @@ details.column-config > summary > span {
   font-family: var(--font-mono), monospace;
   font-size: 10px;
 }
+.track-table th[data-column="albumCover"],
 .track-table td.album-cover-cell {
-  max-width: 58px;
-  width: 58px;
+  max-width: 78px;
+  min-width: 78px;
+  width: 78px;
 }
 .album-cover {
   background: var(--panel-2);
@@ -908,30 +910,47 @@ details.column-config > summary > span {
   display: flex;
   justify-content: center;
 }
-.track-table .listen-column {
-  cursor: default;
-  min-width: 78px;
-  text-align: left;
-  width: 78px;
+.track-cover-actions {
+  height: 34px;
+  position: relative;
+  width: 62px;
 }
-.track-table td.track-actions {
-  max-width: none;
-  width: 78px;
+.track-cover-art {
+  opacity: .18;
+  transition: opacity 150ms ease;
 }
 .track-action-buttons {
   align-items: center;
   display: flex;
   gap: 6px;
+  left: 3px;
   justify-content: flex-start;
+  position: absolute;
+  top: 3px;
+  transition: opacity 150ms ease;
 }
-.track-actions button,
-.track-actions a {
+.track-action-buttons button,
+.track-action-buttons a {
   height: 27px;
   width: 27px;
 }
-.track-actions button:first-child {
+.track-action-buttons button:first-child {
   background: rgba(183,247,47,.12);
   color: var(--green);
+}
+@media (hover: hover) and (pointer: fine) {
+  .track-cover-art { opacity: 1; }
+  .track-action-buttons {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .track-table tbody tr:hover .track-cover-art,
+  .track-cover-actions:focus-within .track-cover-art { opacity: .18; }
+  .track-table tbody tr:hover .track-action-buttons,
+  .track-cover-actions:focus-within .track-action-buttons {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 .explicit {
   border: 1px solid var(--dim);
@@ -1274,8 +1293,22 @@ details.column-config > summary > span {
   .secondary-button { min-height: 44px; }
   .release-action-buttons button,
   .release-action-buttons a,
-  .track-actions button,
-  .track-actions a { height: 44px; width: 44px; }
+  .track-action-buttons button,
+  .track-action-buttons a { height: 44px; width: 44px; }
+  .track-table th[data-column="albumCover"],
+  .track-table td.album-cover-cell {
+    max-width: 112px;
+    min-width: 112px;
+    width: 112px;
+  }
+  .track-cover-actions {
+    height: 44px;
+    width: 94px;
+  }
+  .track-action-buttons {
+    left: 0;
+    top: 0;
+  }
   .hero { display: block; min-height: 0; }
   .hero-demo { margin-top: 48px; transform: none; }
   .feature-strip { grid-template-columns: 1fr; }
@@ -1537,7 +1570,7 @@ details.column-config > summary > span {
   }
   .track-table td[data-column="position"]::before,
   .track-table td.track-title::before,
-  .track-table td.track-actions::before { display: none; }
+  .track-table td.album-cover-cell::before { display: none; }
   .track-table td.track-title {
     font-size: 15px;
     grid-column: 1 / -1;
@@ -1551,22 +1584,29 @@ details.column-config > summary > span {
     word-break: break-word;
   }
   .track-table td.album-cover-cell {
-    grid-column: 1;
+    grid-column: 1 / -1;
     grid-row: 1;
     max-width: none;
+    min-width: 0;
+    padding-right: 48px;
     width: auto;
   }
   .album-cover {
     height: 44px;
     width: 44px;
   }
-  .track-table td.track-actions {
-    border-top: 0;
-    grid-column: 2;
-    grid-row: 1;
-    height: auto;
-    padding: 0 48px 0 0;
+  .track-cover-actions {
+    align-items: center;
+    display: flex;
+    gap: 10px;
+    height: 44px;
     width: auto;
+  }
+  .track-cover-art { opacity: 1 !important; }
+  .track-action-buttons {
+    opacity: 1 !important;
+    pointer-events: auto !important;
+    position: static;
   }
   .empty, .loading-state, .error-state { min-height: 210px; padding: 26px; }
   .toast {

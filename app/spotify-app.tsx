@@ -24,7 +24,6 @@ import {
   Sparkles,
 } from "lucide-react";
 import {
-  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -2066,8 +2065,10 @@ function PlaylistsView() {
                   <thead>
                     <tr>
                       {visibleColumns.map((column) => (
-                        <Fragment key={column.id}>
                           <th
+                            aria-label={
+                              column.id === "albumCover" ? "Album cover" : undefined
+                            }
                             aria-sort={
                               sortKey === column.id
                                 ? descending
@@ -2076,9 +2077,10 @@ function PlaylistsView() {
                                 : undefined
                             }
                             data-column={column.id}
+                            key={column.id}
                             scope="col"
                           >
-                            {column.getSortValue ? (
+                            {column.id === "albumCover" ? null : column.getSortValue ? (
                               <button
                                 className="table-sort-button"
                                 onClick={() => sortBy(column.id)}
@@ -2089,12 +2091,6 @@ function PlaylistsView() {
                               </button>
                             ) : column.label}
                           </th>
-                          {column.id === "albumCover" && (
-                            <th className="listen-column" scope="col">
-                              Listen
-                            </th>
-                          )}
-                        </Fragment>
                       ))}
                     </tr>
                   </thead>
@@ -2113,16 +2109,17 @@ function PlaylistsView() {
                       return (
                       <tr key={entry.key}>
                         {visibleColumns.map((column) => (
-                          <Fragment key={column.id}>
-                            <td
-                              className={column.className}
-                              data-column={column.id}
-                              data-label={column.sortLabel ?? column.label}
-                            >
-                              {column.render(entry, index)}
-                            </td>
-                            {column.id === "albumCover" && (
-                              <td className="track-actions" data-label="Listen">
+                          <td
+                            className={column.className}
+                            data-column={column.id}
+                            data-label={column.sortLabel ?? column.label}
+                            key={column.id}
+                          >
+                            {column.id === "albumCover" ? (
+                              <div className="track-cover-actions">
+                                <div className="track-cover-art">
+                                  {column.render(entry, index)}
+                                </div>
                                 <div className="track-action-buttons">
                                   <button
                                     aria-label={`Play ${entry.item.name} in this browser`}
@@ -2160,9 +2157,9 @@ function PlaylistsView() {
                                     </a>
                                   )}
                                 </div>
-                              </td>
-                            )}
-                          </Fragment>
+                              </div>
+                            ) : column.render(entry, index)}
+                          </td>
                         ))}
                       </tr>
                     )})}
