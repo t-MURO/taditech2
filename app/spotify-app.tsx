@@ -5,6 +5,7 @@ import {
   ArrowRight,
   ArrowUpDown,
   Check,
+  ChevronLeft,
   ChevronRight,
   CircleUserRound,
   Clock3,
@@ -2004,14 +2005,17 @@ function PlaylistsView() {
   const [descending, setDescending] = useState(false);
   const [toast, setToast] = useState("");
   const [actionItem, setActionItem] = useState<PlaylistItem | null>(null);
-  const [actionPlaylistOnly, setActionPlaylistOnly] = useState(false);
   const [actionPlaylistQuery, setActionPlaylistQuery] = useState("");
   const [recentPlaylistIds, setRecentPlaylistIds] = useState<string[]>([]);
   const [songContextMenu, setSongContextMenu] = useState<{
     entry: PlaylistItem;
+    view: "actions" | "playlists";
     x: number;
     y: number;
   } | null>(null);
+  const [contextPlaylistQuery, setContextPlaylistQuery] = useState("");
+  const [contextPlaylistPendingId, setContextPlaylistPendingId] = useState("");
+  const [contextPlaylistError, setContextPlaylistError] = useState("");
   const [actionPending, setActionPending] = useState<"queue" | "playlist" | "">("");
   const [actionError, setActionError] = useState("");
   const [destinationPlaylistId, setDestinationPlaylistId] = useState("");
@@ -2125,6 +2129,13 @@ function PlaylistsView() {
       playlist.name.toLocaleLowerCase().includes(needle),
     );
   }, [actionPlaylistQuery, orderedActionPlaylists]);
+  const filteredContextPlaylists = useMemo(() => {
+    const needle = contextPlaylistQuery.trim().toLocaleLowerCase();
+    if (!needle) return orderedActionPlaylists;
+    return orderedActionPlaylists.filter((playlist) =>
+      playlist.name.toLocaleLowerCase().includes(needle),
+    );
+  }, [contextPlaylistQuery, orderedActionPlaylists]);
 
   const loadItems = useCallback(async (playlist: Pick<Playlist, "id">) => {
     itemLoadController.current?.abort();
@@ -2176,14 +2187,24 @@ function PlaylistsView() {
     const closeOnKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") closeMenu();
     };
+    const closeOnScroll = (event: Event) => {
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest(".song-context-menu")
+      ) {
+        return;
+      }
+      closeMenu();
+    };
     window.addEventListener("pointerdown", closeMenu);
     window.addEventListener("resize", closeMenu);
-    window.addEventListener("scroll", closeMenu, true);
+    window.addEventListener("scroll", closeOnScroll, true);
     window.addEventListener("keydown", closeOnKey);
     return () => {
       window.removeEventListener("pointerdown", closeMenu);
       window.removeEventListener("resize", closeMenu);
-      window.removeEventListener("scroll", closeMenu, true);
+      window.removeEventListener("scroll", closeOnScroll, true);
       window.removeEventListener("keydown", closeOnKey);
     };
   }, [songContextMenu]);
@@ -2265,17 +2286,13 @@ function PlaylistsView() {
     );
   };
 
-  const openTrackActions = (
-    entry: PlaylistItem,
-    playlistOnly = false,
-  ) => {
+  const openTrackActions = (entry: PlaylistItem) => {
     const recentDestination = recentPlaylistIds.find((playlistId) =>
       playlists.some((playlist) => playlist.id === playlistId),
     );
     setDestinationPlaylistId(
       recentDestination ?? selected?.id ?? playlists[0]?.id ?? "",
     );
-    setActionPlaylistOnly(playlistOnly);
     setActionPlaylistQuery("");
     setActionPending("");
     setActionError("");
@@ -2298,6 +2315,94 @@ function PlaylistsView() {
       }
       return next;
     });
+  };
+
+  const applyPlaylistAddition = (
+    entry: PlaylistItem,
+    playlistId: string,
+    snapshotId: string,
+  ) => {
+    const destination = playlists.find(
+      (playlist) => playlist.id === playlistId,
+    );
+    const updatePlaylist = (playlist: Playlist): Playlist =>
+      playlist.id === playlistId
+        ? {
+            ...playlist,
+            itemCount: playlist.itemCount + 1,
+            snapshot_id: snapshotId,
+          }
+        : playlist;
+    setPlaylists((current) => current.map(updatePlaylist));
+    setSelected((current) => current ? updatePlaylist(current) : current);
+    if (loadedPlaylistId === playlistId) {
+      setItems((current) => [
+        ...current,
+        {
+          added_at: new Date().toISOString(),
+          is_local: false,
+          item: entry.item,
+          key: `added:${snapshotId}:${current.length}`,
+          originalIndex: current.length,
+          position: current.length,
+        },
+      ]);
+    }
+    rememberPlaylistDestination(playlistId);
+    return destination;
+  };
+
+  const openContextPlaylistPicker = () => {
+    setContextPlaylistQuery("");
+    setContextPlaylistError("");
+    setContextPlaylistPendingId("");
+    setSongContextMenu((current) => {
+      if (!current) return current;
+      const menuWidth = 292;
+      const menuHeight = 410;
+      return {
+        ...current,
+        view: "playlists",
+        x: Math.max(
+          12,
+          Math.min(current.x, window.innerWidth - menuWidth - 12),
+        ),
+        y: Math.max(
+          12,
+          Math.min(current.y, window.innerHeight - menuHeight - 12),
+        ),
+      };
+    });
+  };
+
+  const addContextSongToPlaylist = async (
+    entry: PlaylistItem,
+    playlist: Playlist,
+  ) => {
+    if (contextPlaylistPendingId) return;
+    setContextPlaylistPendingId(playlist.id);
+    setContextPlaylistError("");
+    try {
+      const result = await getJson<{ snapshotId: string }>(
+        `/api/playlists/${encodeURIComponent(playlist.id)}/items`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ uri: entry.item.uri }),
+        },
+      );
+      applyPlaylistAddition(entry, playlist.id, result.snapshotId);
+      setSongContextMenu(null);
+      showToast(`Added “${entry.item.name}” to ${playlist.name}.`);
+    } catch (addError) {
+      setContextPlaylistError(
+        addError instanceof Error
+          ? addError.message
+          : "Could not add this track to the playlist.",
+      );
+    } finally {
+      setContextPlaylistPendingId("");
+    }
   };
 
   const addContextSongToQueue = async (entry: PlaylistItem) => {
@@ -2338,33 +2443,11 @@ function PlaylistsView() {
           body: JSON.stringify({ uri: actionItem.item.uri }),
         },
       );
-      const destination = playlists.find(
-        (playlist) => playlist.id === destinationPlaylistId,
+      const destination = applyPlaylistAddition(
+        actionItem,
+        destinationPlaylistId,
+        result.snapshotId,
       );
-      const updatePlaylist = (playlist: Playlist): Playlist =>
-        playlist.id === destinationPlaylistId
-          ? {
-              ...playlist,
-              itemCount: playlist.itemCount + 1,
-              snapshot_id: result.snapshotId,
-            }
-          : playlist;
-      setPlaylists((current) => current.map(updatePlaylist));
-      setSelected((current) => current ? updatePlaylist(current) : current);
-      if (loadedPlaylistId === destinationPlaylistId) {
-        setItems((current) => [
-          ...current,
-          {
-            added_at: new Date().toISOString(),
-            is_local: false,
-            item: actionItem.item,
-            key: `added:${result.snapshotId}:${current.length}`,
-            originalIndex: current.length,
-            position: current.length,
-          },
-        ]);
-      }
-      rememberPlaylistDestination(destinationPlaylistId);
       showToast(
         `Added “${actionItem.item.name}” to ${destination?.name ?? "the playlist"}.`,
       );
@@ -2879,8 +2962,12 @@ function PlaylistsView() {
                           event.preventDefault();
                           const menuWidth = 236;
                           const menuHeight = 202;
+                          setContextPlaylistQuery("");
+                          setContextPlaylistError("");
+                          setContextPlaylistPendingId("");
                           setSongContextMenu({
                             entry,
+                            view: "actions",
                             x: Math.max(
                               12,
                               Math.min(event.clientX, window.innerWidth - menuWidth - 12),
@@ -2976,74 +3063,176 @@ function PlaylistsView() {
       )}
       {songContextMenu && contextEntry && (
         <div
-          aria-label={`Actions for ${contextEntry.item.name}`}
-          className="song-context-menu"
+          aria-label={
+            songContextMenu.view === "playlists"
+              ? `Choose a playlist for ${contextEntry.item.name}`
+              : `Actions for ${contextEntry.item.name}`
+          }
+          className={`song-context-menu ${
+            songContextMenu.view === "playlists" ? "playlist-picker" : ""
+          }`}
           onContextMenu={(event) => event.preventDefault()}
           onPointerDown={(event) => event.stopPropagation()}
-          role="menu"
+          role={songContextMenu.view === "playlists" ? "dialog" : "menu"}
           style={{ left: songContextMenu.x, top: songContextMenu.y }}
         >
-          <div className="song-context-heading">
-            <strong>{contextEntry.item.name}</strong>
-            <span>
-              {contextEntry.item.artists?.map((artist) => artist.name).join(", ") ||
-                "Unknown artist"}
-            </span>
-          </div>
-          <button
-            disabled={
-              !contextCanPlay ||
-              !playback.deviceReady ||
-              Boolean(playback.pendingKey)
-            }
-            onClick={() => {
-              setSongContextMenu(null);
-              playPlaylistEntry(
-                contextEntry,
-                `context-play:${contextEntry.key}`,
-              );
-            }}
-            role="menuitem"
-            type="button"
-          >
-            <Play size={15} fill="currentColor" />
-            Play
-          </button>
-          <button
-            disabled={
-              !contextCanUseTrack ||
-              !playback.authorized ||
-              Boolean(playback.pendingKey)
-            }
-            onClick={() => void addContextSongToQueue(contextEntry)}
-            role="menuitem"
-            type="button"
-          >
-            <ListEnd size={15} />
-            Add to queue
-          </button>
-          <button
-            disabled={!contextCanUseTrack || Boolean(playback.pendingKey)}
-            onClick={() => {
-              setSongContextMenu(null);
-              openTrackActions(contextEntry, true);
-            }}
-            role="menuitem"
-            type="button"
-          >
-            <ListPlus size={15} />
-            Add to playlist
-          </button>
-          {contextAlbumHref ? (
-            <a href={contextAlbumHref} role="menuitem">
-              <ExternalLink size={15} />
-              Go to album in Spotify
-            </a>
+          {songContextMenu.view === "playlists" ? (
+            <>
+              <div className="song-context-picker-head">
+                <button
+                  aria-label="Back to song actions"
+                  disabled={Boolean(contextPlaylistPendingId)}
+                  onClick={() =>
+                    setSongContextMenu((current) =>
+                      current ? { ...current, view: "actions" } : current,
+                    )
+                  }
+                  type="button"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                <div>
+                  <strong>{contextEntry.item.name}</strong>
+                  <span>Add to playlist</span>
+                </div>
+              </div>
+              <label className="song-context-search">
+                <Search aria-hidden="true" size={14} />
+                <input
+                  autoFocus
+                  disabled={Boolean(contextPlaylistPendingId)}
+                  onChange={(event) =>
+                    setContextPlaylistQuery(event.target.value)
+                  }
+                  placeholder="Search playlists"
+                  value={contextPlaylistQuery}
+                />
+              </label>
+              {contextPlaylistError && (
+                <p className="song-context-error" role="alert">
+                  {contextPlaylistError}
+                </p>
+              )}
+              <div
+                aria-label="Editable playlists"
+                className="song-context-playlist-list"
+                role="listbox"
+              >
+                {filteredContextPlaylists.length === 0 ? (
+                  <div className="song-context-playlist-empty" role="status">
+                    No playlists match “{contextPlaylistQuery.trim()}”.
+                  </div>
+                ) : (
+                  filteredContextPlaylists.map((playlist) => {
+                    const coverUrl = preferredSpotifyImage(playlist.images);
+                    const isPending =
+                      contextPlaylistPendingId === playlist.id;
+                    return (
+                      <button
+                        aria-label={`Add to ${playlist.name}`}
+                        aria-selected={false}
+                        disabled={Boolean(contextPlaylistPendingId)}
+                        key={playlist.id}
+                        onClick={() =>
+                          void addContextSongToPlaylist(
+                            contextEntry,
+                            playlist,
+                          )
+                        }
+                        role="option"
+                        type="button"
+                      >
+                        {coverUrl ? (
+                          <img alt="" src={coverUrl} />
+                        ) : (
+                          <span className="song-context-playlist-cover">
+                            <ListMusic size={15} />
+                          </span>
+                        )}
+                        <span className="song-context-playlist-copy">
+                          <strong>{playlist.name}</strong>
+                          <small>
+                            {playlist.itemCount} item
+                            {playlist.itemCount === 1 ? "" : "s"}
+                          </small>
+                        </span>
+                        {recentPlaylistIdSet.has(playlist.id) && (
+                          <em>Recent</em>
+                        )}
+                        {isPending && (
+                          <LoaderCircle className="spinner" size={14} />
+                        )}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </>
           ) : (
-            <button disabled role="menuitem" type="button">
-              <ExternalLink size={15} />
-              Album unavailable
-            </button>
+            <>
+              <div className="song-context-heading">
+                <strong>{contextEntry.item.name}</strong>
+                <span>
+                  {contextEntry.item.artists
+                    ?.map((artist) => artist.name)
+                    .join(", ") || "Unknown artist"}
+                </span>
+              </div>
+              <button
+                disabled={
+                  !contextCanPlay ||
+                  !playback.deviceReady ||
+                  Boolean(playback.pendingKey)
+                }
+                onClick={() => {
+                  setSongContextMenu(null);
+                  playPlaylistEntry(
+                    contextEntry,
+                    `context-play:${contextEntry.key}`,
+                  );
+                }}
+                role="menuitem"
+                type="button"
+              >
+                <Play size={15} fill="currentColor" />
+                Play
+              </button>
+              <button
+                disabled={
+                  !contextCanUseTrack ||
+                  !playback.authorized ||
+                  Boolean(playback.pendingKey)
+                }
+                onClick={() => void addContextSongToQueue(contextEntry)}
+                role="menuitem"
+                type="button"
+              >
+                <ListEnd size={15} />
+                Add to queue
+              </button>
+              <button
+                disabled={
+                  !contextCanUseTrack || Boolean(playback.pendingKey)
+                }
+                onClick={openContextPlaylistPicker}
+                role="menuitem"
+                type="button"
+              >
+                <ListPlus size={15} />
+                Add to playlist
+              </button>
+              {contextAlbumHref ? (
+                <a href={contextAlbumHref} role="menuitem">
+                  <ExternalLink size={15} />
+                  Go to album in Spotify
+                </a>
+              ) : (
+                <button disabled role="menuitem" type="button">
+                  <ExternalLink size={15} />
+                  Album unavailable
+                </button>
+              )}
+            </>
           )}
         </div>
       )}
@@ -3059,16 +3248,12 @@ function PlaylistsView() {
           <section
             aria-labelledby="track-action-title"
             aria-modal="true"
-            className={`track-action-dialog ${
-              actionPlaylistOnly ? "playlist-picker-dialog" : ""
-            }`}
+            className="track-action-dialog"
             role="dialog"
           >
             <header className="track-action-dialog-head">
               <div>
-                <span>
-                  {actionPlaylistOnly ? "Add to playlist" : "Song actions"}
-                </span>
+                <span>Song actions</span>
                 <h2 id="track-action-title">{actionItem.item.name}</h2>
                 <p>
                   {actionItem.item.artists?.map((artist) => artist.name).join(", ") ||
@@ -3084,22 +3269,20 @@ function PlaylistsView() {
                 <X size={17} />
               </button>
             </header>
-            {!actionPlaylistOnly && (
-              <button
-                className="track-action-primary"
-                disabled={Boolean(actionPending) || !playback.authorized}
-                onClick={() => void addActionItemToQueue()}
-                type="button"
-              >
-                {actionPending === "queue"
-                  ? <LoaderCircle className="spinner" size={17} />
-                  : <ListEnd size={17} />}
-                <span>
-                  <strong>Add to queue</strong>
-                  <small>Play it next on your active Spotify player</small>
-                </span>
-              </button>
-            )}
+            <button
+              className="track-action-primary"
+              disabled={Boolean(actionPending) || !playback.authorized}
+              onClick={() => void addActionItemToQueue()}
+              type="button"
+            >
+              {actionPending === "queue"
+                ? <LoaderCircle className="spinner" size={17} />
+                : <ListEnd size={17} />}
+              <span>
+                <strong>Add to queue</strong>
+                <small>Play it next on your active Spotify player</small>
+              </span>
+            </button>
             <div className="track-action-playlist">
               <label htmlFor="track-action-playlist-search">
                 Add to a playlist
@@ -3107,7 +3290,6 @@ function PlaylistsView() {
               <label className="track-action-playlist-search">
                 <Search aria-hidden="true" size={14} />
                 <input
-                  autoFocus={actionPlaylistOnly}
                   disabled={Boolean(actionPending)}
                   id="track-action-playlist-search"
                   onChange={(event) => {
