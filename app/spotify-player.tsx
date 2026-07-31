@@ -95,6 +95,7 @@ type PlaybackContextValue = {
   isPlaying: boolean;
   pendingKey: string;
   play: (target: PlayTarget, key: string) => Promise<void>;
+  queue: (uri: string, key: string) => Promise<boolean>;
 };
 
 const PlaybackContext = createContext<PlaybackContextValue | null>(null);
@@ -551,6 +552,77 @@ export function PlaybackProvider({
     ],
   );
 
+  const queue = useCallback(
+    async (uri: string, key: string) => {
+      if (!authorized || reconnectRequired) {
+        setReconnectRequired(true);
+        setError("Reconnect Spotify to add tracks to your queue.");
+        return false;
+      }
+      if (pendingCommandRef.current || seekDraftRef.current !== null) {
+        return false;
+      }
+
+      const commandController = new AbortController();
+      commandAbortRef.current = commandController;
+      const commandTimeout = window.setTimeout(
+        () => commandController.abort(),
+        15_000,
+      );
+      pendingCommandRef.current = key;
+      commandAcceptedRef.current = false;
+      setPendingKey(key);
+      setError("");
+      try {
+        const response = await fetch("/api/playback/queue", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            uri,
+            ...(deviceId && stateRef.current ? { deviceId } : {}),
+          }),
+          signal: commandController.signal,
+        });
+        if (!response.ok) {
+          throw await errorFromResponse(
+            response,
+            "Spotify could not add this track to the queue.",
+          );
+        }
+        return true;
+      } catch (queueError) {
+        if (queueError instanceof PlaybackClientError && queueError.reconnect) {
+          setActiveDeviceId("");
+          setState(null);
+          setConnecting(false);
+          setReconnectRequired(true);
+          setRetryAvailable(false);
+          resetSeekState();
+        }
+        setError(
+          isAbortError(queueError)
+            ? "Spotify took too long to update the queue. Try again."
+            : messageFrom(queueError),
+        );
+        return false;
+      } finally {
+        window.clearTimeout(commandTimeout);
+        if (pendingCommandRef.current === key) clearPending();
+        if (commandAbortRef.current === commandController) {
+          commandAbortRef.current = null;
+        }
+      }
+    },
+    [
+      authorized,
+      clearPending,
+      deviceId,
+      reconnectRequired,
+      resetSeekState,
+      setActiveDeviceId,
+    ],
+  );
+
   const deviceReady =
     authorized &&
     playerEnabled &&
@@ -569,6 +641,7 @@ export function PlaybackProvider({
       pendingKey:
         pendingKey || (seekDraft !== null ? "control:seek-draft" : ""),
       play,
+      queue,
     }),
     [
       authorized,
@@ -577,6 +650,7 @@ export function PlaybackProvider({
       isPlaying,
       pendingKey,
       play,
+      queue,
       reconnectRequired,
       seekDraft,
     ],
@@ -734,6 +808,8 @@ export function PlaybackProvider({
       return;
     }
     const commandKey = `control:${control}`;
+    const toggledPausedState =
+      control === "toggle" ? !stateRef.current?.paused : undefined;
     const commandController = new AbortController();
     commandAbortRef.current = commandController;
     const commandTimeout = window.setTimeout(
@@ -753,6 +829,27 @@ export function PlaybackProvider({
             ? player.nextTrack()
             : player.togglePlay();
       await abortable(command, commandController.signal);
+      if (control === "toggle" && toggledPausedState !== undefined) {
+        const now = Date.now();
+        setState((current) => {
+          if (!current) return current;
+          const nextState = {
+            ...current,
+            paused: toggledPausedState,
+            position: playbackElapsed(
+              current.position,
+              current.duration,
+              current.paused,
+              observedAt,
+              now,
+            ),
+          };
+          stateRef.current = nextState;
+          return nextState;
+        });
+        setObservedAt(now);
+        setClock(now);
+      }
     } catch (controlError) {
       setError(
         isAbortError(controlError)
@@ -855,7 +952,7 @@ export function PlaybackProvider({
             </button>
             <button
               aria-label={state?.paused ? "Play" : "Pause"}
-              className="player-toggle"
+              className={`player-toggle ${state?.paused ? "is-paused" : "is-playing"}`}
               disabled={
                 !deviceReady ||
                 !currentTrack ||
@@ -863,6 +960,7 @@ export function PlaybackProvider({
                 seekDraft !== null
               }
               onClick={() => void runControl("toggle")}
+              title={state?.paused ? "Resume playback" : "Pause playback"}
               type="button"
             >
               {connecting

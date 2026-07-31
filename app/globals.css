@@ -920,11 +920,11 @@ details.column-config > summary > span {
 }
 .track-table th[data-column="albumCover"],
 .track-table td.album-cover-cell {
-  max-width: 114px;
-  min-width: 114px;
+  max-width: 147px;
+  min-width: 147px;
   padding-left: 8px;
   padding-right: 4px;
-  width: 114px;
+  width: 147px;
 }
 .album-cover {
   background: var(--panel-2);
@@ -945,7 +945,7 @@ details.column-config > summary > span {
   display: flex;
   gap: 8px;
   height: 34px;
-  width: 102px;
+  width: 135px;
 }
 .track-cover-art {
   flex: 0 0 auto;
@@ -1022,6 +1022,117 @@ details.column-config > summary > span {
   position: fixed;
   transform: translateX(-50%);
   z-index: 40;
+}
+.track-action-backdrop {
+  align-items: center;
+  background: rgba(2,5,3,.76);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 24px;
+  position: fixed;
+  z-index: 70;
+}
+.track-action-dialog {
+  background: var(--panel);
+  border: 1px solid rgba(255,255,255,.16);
+  border-radius: 18px;
+  box-shadow: 0 28px 90px rgba(0,0,0,.6);
+  display: grid;
+  gap: 18px;
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+  padding: 22px;
+  width: min(430px, 100%);
+}
+.track-action-dialog-head {
+  align-items: start;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+}
+.track-action-dialog-head span,
+.track-action-playlist label {
+  color: var(--green);
+  display: block;
+  font-family: var(--font-mono), monospace;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+.track-action-dialog-head h2 {
+  font-size: 20px;
+  letter-spacing: -.025em;
+  margin: 5px 0 3px;
+}
+.track-action-dialog-head p {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+}
+.track-action-dialog-head button {
+  align-items: center;
+  background: rgba(255,255,255,.055);
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--ink);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 34px;
+  justify-content: center;
+  padding: 0;
+  width: 34px;
+}
+.track-action-dialog-head button:disabled { cursor: not-allowed; opacity: .4; }
+.track-action-primary {
+  align-items: center;
+  background: rgba(183,247,47,.09);
+  border: 1px solid rgba(183,247,47,.25);
+  border-radius: 12px;
+  color: var(--ink);
+  cursor: pointer;
+  display: flex;
+  gap: 12px;
+  padding: 14px;
+  text-align: left;
+  width: 100%;
+}
+.track-action-primary > svg { color: var(--green); flex: 0 0 auto; }
+.track-action-primary span { display: grid; gap: 3px; }
+.track-action-primary strong { font-size: 13px; }
+.track-action-primary small { color: var(--muted); font-size: 10px; }
+.track-action-primary:disabled { cursor: not-allowed; opacity: .42; }
+.track-action-playlist {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  padding-top: 18px;
+}
+.track-action-playlist select {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--ink);
+  font: inherit;
+  min-height: 44px;
+  padding: 0 12px;
+  width: 100%;
+}
+.track-action-playlist .primary-button {
+  justify-content: center;
+  width: 100%;
+}
+.track-action-error {
+  background: rgba(255,111,111,.08);
+  border: 1px solid rgba(255,111,111,.2);
+  border-radius: 9px;
+  color: #ffb0b0;
+  font-size: 11px;
+  line-height: 1.45;
+  margin: 0;
+  padding: 10px 12px;
 }
 .legal-note { color: var(--dim); font-size: 10px; line-height: 1.5; margin-top: 20px; }
 
@@ -1100,6 +1211,10 @@ details.column-config > summary > span {
   color: var(--night);
   height: 38px;
   width: 38px;
+}
+.player-controls .player-toggle.is-paused {
+  background: var(--green);
+  box-shadow: 0 0 0 4px rgba(183,247,47,.1);
 }
 .player-enable {
   background: var(--green);
@@ -1413,13 +1528,13 @@ details.column-config > summary > span {
   .track-action-buttons a { height: 44px; width: 44px; }
   .track-table th[data-column="albumCover"],
   .track-table td.album-cover-cell {
-    max-width: 160px;
-    min-width: 160px;
-    width: 160px;
+    max-width: 210px;
+    min-width: 210px;
+    width: 210px;
   }
   .track-cover-actions {
     height: 44px;
-    width: 148px;
+    width: 198px;
   }
   .hero { display: block; min-height: 0; }
   .hero-demo { margin-top: 48px; transform: none; }

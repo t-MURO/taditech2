@@ -21,6 +21,10 @@ export const PLAYBACK_SCOPES = [
   "user-read-private",
   "user-modify-playback-state",
 ];
+export const PLAYLIST_MODIFY_SCOPES = [
+  "playlist-modify-public",
+  "playlist-modify-private",
+];
 
 export class SpotifyError extends Error {
   status: number;
@@ -88,6 +92,12 @@ export async function hasPlaybackScopes() {
   const jar = await cookies();
   const granted = new Set((jar.get("spotify_scopes")?.value || "").split(" "));
   return PLAYBACK_SCOPES.every((scope) => granted.has(scope));
+}
+
+export async function hasPlaylistModifyScopes() {
+  const jar = await cookies();
+  const granted = new Set((jar.get("spotify_scopes")?.value || "").split(" "));
+  return PLAYLIST_MODIFY_SCOPES.every((scope) => granted.has(scope));
 }
 
 async function refreshAccessToken(refreshToken: string) {

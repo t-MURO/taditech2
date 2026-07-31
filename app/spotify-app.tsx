@@ -9,8 +9,11 @@ import {
   CircleUserRound,
   Clock3,
   Columns3,
+  Ellipsis,
   ExternalLink,
+  ListEnd,
   ListMusic,
+  ListPlus,
   LoaderCircle,
   LogOut,
   Music2,
@@ -22,6 +25,7 @@ import {
   Search,
   Shuffle,
   Sparkles,
+  X,
 } from "lucide-react";
 import {
   Fragment,
@@ -1540,6 +1544,10 @@ function PlaylistsView() {
   const [sortKey, setSortKey] = useState<ColumnId>("position");
   const [descending, setDescending] = useState(false);
   const [toast, setToast] = useState("");
+  const [actionItem, setActionItem] = useState<PlaylistItem | null>(null);
+  const [actionPending, setActionPending] = useState<"queue" | "playlist" | "">("");
+  const [actionError, setActionError] = useState("");
+  const [destinationPlaylistId, setDestinationPlaylistId] = useState("");
   const [loadedPlaylistId, setLoadedPlaylistId] = useState<string | null>(null);
   const [visibleColumnIds, setVisibleColumnIds] =
     useState<ColumnId[]>(DEFAULT_COLUMN_IDS);
@@ -1640,6 +1648,15 @@ function PlaylistsView() {
 
   useEffect(() => () => itemLoadController.current?.abort(), []);
 
+  useEffect(() => {
+    if (!actionItem) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !actionPending) setActionItem(null);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [actionItem, actionPending]);
+
   const visibleItems = useMemo(() => {
     const needle = query.toLowerCase();
     const filtered = items.filter((entry) =>
@@ -1698,6 +1715,88 @@ function PlaylistsView() {
 
   const showAllColumns = () => {
     updateVisibleColumns(TRACK_COLUMNS.map((column) => column.id));
+  };
+
+  const showToast = useCallback((message: string) => {
+    setToast(message);
+    window.setTimeout(() => setToast(""), 3200);
+  }, []);
+
+  const openTrackActions = (entry: PlaylistItem) => {
+    setDestinationPlaylistId(selected?.id ?? playlists[0]?.id ?? "");
+    setActionPending("");
+    setActionError("");
+    setActionItem(entry);
+  };
+
+  const addActionItemToQueue = async () => {
+    if (!actionItem || actionPending) return;
+    setActionPending("queue");
+    const queued = await playback.queue(
+      actionItem.item.uri,
+      `queue:${actionItem.key}`,
+    );
+    setActionPending("");
+    if (!queued) {
+      setActionError("Spotify could not add this track to the queue.");
+      return;
+    }
+    showToast(`Added “${actionItem.item.name}” to the queue.`);
+    setActionItem(null);
+  };
+
+  const addActionItemToPlaylist = async () => {
+    if (!actionItem || !destinationPlaylistId || actionPending) return;
+    setActionPending("playlist");
+    setActionError("");
+    try {
+      const result = await getJson<{ snapshotId: string }>(
+        `/api/playlists/${encodeURIComponent(destinationPlaylistId)}/items`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ uri: actionItem.item.uri }),
+        },
+      );
+      const destination = playlists.find(
+        (playlist) => playlist.id === destinationPlaylistId,
+      );
+      const updatePlaylist = (playlist: Playlist): Playlist =>
+        playlist.id === destinationPlaylistId
+          ? {
+              ...playlist,
+              itemCount: playlist.itemCount + 1,
+              snapshot_id: result.snapshotId,
+            }
+          : playlist;
+      setPlaylists((current) => current.map(updatePlaylist));
+      setSelected((current) => current ? updatePlaylist(current) : current);
+      if (loadedPlaylistId === destinationPlaylistId) {
+        setItems((current) => [
+          ...current,
+          {
+            added_at: new Date().toISOString(),
+            is_local: false,
+            item: actionItem.item,
+            key: `added:${result.snapshotId}:${current.length}`,
+            originalIndex: current.length,
+            position: current.length,
+          },
+        ]);
+      }
+      showToast(
+        `Added “${actionItem.item.name}” to ${destination?.name ?? "the playlist"}.`,
+      );
+      setActionItem(null);
+    } catch (addError) {
+      setActionError(
+        addError instanceof Error
+          ? addError.message
+          : "Could not add this track to the playlist.",
+      );
+    } finally {
+      setActionPending("");
+    }
   };
 
   const shuffle = () => {
@@ -2165,6 +2264,10 @@ function PlaylistsView() {
                         entry.item.is_local !== true &&
                         entry.item.is_playable !== false &&
                         /^spotify:track:[a-zA-Z0-9]{22}$/.test(entry.item.uri);
+                      const canAdd =
+                        !entry.is_local &&
+                        entry.item.is_local !== true &&
+                        /^spotify:track:[a-zA-Z0-9]{22}$/.test(entry.item.uri);
                       const playbackKey = `track:${entry.key}`;
                       const spotifyHref = spotifyAppHref({
                         uri: entry.item.uri,
@@ -2225,6 +2328,19 @@ function PlaylistsView() {
                                       <ExternalLink size={13} />
                                     </a>
                                   )}
+                                  <button
+                                    aria-label={`More actions for ${entry.item.name}`}
+                                    disabled={!canAdd || Boolean(playback.pendingKey)}
+                                    onClick={() => openTrackActions(entry)}
+                                    title={
+                                      canAdd
+                                        ? "Queue or add to a playlist"
+                                        : "Local tracks cannot be added with the Spotify API"
+                                    }
+                                    type="button"
+                                  >
+                                    <Ellipsis size={14} />
+                                  </button>
                                 </div>
                               </div>
                             ) : column.id === "track" ? (
@@ -2245,6 +2361,89 @@ function PlaylistsView() {
                 </table>
               </div>
               </>
+            )}
+          </section>
+        </div>
+      )}
+      {actionItem && (
+        <div
+          className="track-action-backdrop"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target && !actionPending) {
+              setActionItem(null);
+            }
+          }}
+        >
+          <section
+            aria-labelledby="track-action-title"
+            aria-modal="true"
+            className="track-action-dialog"
+            role="dialog"
+          >
+            <header className="track-action-dialog-head">
+              <div>
+                <span>Song actions</span>
+                <h2 id="track-action-title">{actionItem.item.name}</h2>
+                <p>
+                  {actionItem.item.artists?.map((artist) => artist.name).join(", ") ||
+                    "Unknown artist"}
+                </p>
+              </div>
+              <button
+                aria-label="Close song actions"
+                disabled={Boolean(actionPending)}
+                onClick={() => setActionItem(null)}
+                type="button"
+              >
+                <X size={17} />
+              </button>
+            </header>
+            <button
+              className="track-action-primary"
+              disabled={Boolean(actionPending) || !playback.authorized}
+              onClick={() => void addActionItemToQueue()}
+              type="button"
+            >
+              {actionPending === "queue"
+                ? <LoaderCircle className="spinner" size={17} />
+                : <ListEnd size={17} />}
+              <span>
+                <strong>Add to queue</strong>
+                <small>Play it next on your active Spotify player</small>
+              </span>
+            </button>
+            <div className="track-action-playlist">
+              <label htmlFor="track-action-playlist">
+                Add to a playlist
+              </label>
+              <select
+                disabled={Boolean(actionPending)}
+                id="track-action-playlist"
+                onChange={(event) =>
+                  setDestinationPlaylistId(event.target.value)
+                }
+                value={destinationPlaylistId}
+              >
+                {playlists.map((playlist) => (
+                  <option key={playlist.id} value={playlist.id}>
+                    {playlist.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="primary-button"
+                disabled={!destinationPlaylistId || Boolean(actionPending)}
+                onClick={() => void addActionItemToPlaylist()}
+                type="button"
+              >
+                {actionPending === "playlist"
+                  ? <LoaderCircle className="spinner" size={15} />
+                  : <ListPlus size={15} />}
+                Add to playlist
+              </button>
+            </div>
+            {actionError && (
+              <p className="track-action-error" role="alert">{actionError}</p>
             )}
           </section>
         </div>
