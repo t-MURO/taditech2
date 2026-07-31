@@ -1744,7 +1744,7 @@ function PlaylistsView() {
   };
 
   return (
-    <main className="main">
+    <main className="main playlist-main">
       <header className="page-heading">
         <div>
           <div className="eyebrow">Playlist desk</div>
