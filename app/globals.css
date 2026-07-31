@@ -269,7 +269,7 @@ select:focus-visible {
 .feature h3 { font-size: 18px; letter-spacing: -0.03em; margin: 28px 0 9px; }
 .feature p { color: var(--muted); font-size: 13px; line-height: 1.55; margin: 0; max-width: 320px; }
 
-.main { margin: 0 auto; max-width: 1440px; padding: 54px 32px 80px; }
+.main { margin: 0 auto; max-width: 1720px; padding: 54px 32px 80px; }
 .page-heading {
   align-items: end;
   display: flex;
