@@ -280,7 +280,7 @@ export function PlaybackProvider({
     resetSeekState();
     setError("");
 
-    void (async () => {
+    const setupPlayer = async () => {
       try {
         const Spotify = await loadSpotifySdk();
         if (cancelled) return;
@@ -443,10 +443,31 @@ export function PlaybackProvider({
         resetSeekState();
         setError(messageFrom(setupError));
       }
-    })();
+    };
+    const startPlayer = () => {
+      void setupPlayer();
+    };
+    const idleWindow = window as Window & {
+      cancelIdleCallback?: (handle: number) => void;
+      requestIdleCallback?: (
+        callback: () => void,
+        options?: { timeout: number },
+      ) => number;
+    };
+    const idleHandle = idleWindow.requestIdleCallback?.(startPlayer, {
+      timeout: 1_500,
+    });
+    const startupTimer =
+      idleHandle === undefined
+        ? window.setTimeout(startPlayer, 250)
+        : null;
 
     return () => {
       cancelled = true;
+      if (idleHandle !== undefined) {
+        idleWindow.cancelIdleCallback?.(idleHandle);
+      }
+      if (startupTimer !== null) window.clearTimeout(startupTimer);
       clearPending();
       resetSeekState();
       localPlayer?.disconnect();

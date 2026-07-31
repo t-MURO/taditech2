@@ -48,6 +48,7 @@ import {
   loadCachedReleaseScan,
   releaseCacheIsFresh,
   writeCachedReleaseBatch,
+  writeCachedReleaseSnapshot,
 } from "@/lib/release-cache";
 import {
   groupReleasesByMonth,
@@ -171,8 +172,8 @@ const EMPTY_VALUE = "\u2014";
 const COLUMN_STORAGE_KEY = "taditech-playlist-columns-v1";
 const RECENT_PLAYLIST_STORAGE_KEY = "taditech-recent-playlist-destinations-v1";
 const MAX_RECENT_PLAYLISTS = 12;
-const INITIAL_RELEASE_RENDER_LIMIT = 96;
-const RELEASE_RENDER_BATCH_SIZE = 96;
+const INITIAL_RELEASE_RENDER_LIMIT = 48;
+const RELEASE_RENDER_BATCH_SIZE = 48;
 const MAX_RELEASE_SELECTION = 20;
 const PLAYLIST_ADD_CHUNK_SIZE = 100;
 
@@ -1083,6 +1084,7 @@ function ReleasesView({ userId }: { userId: string }) {
     INITIAL_RELEASE_RENDER_LIMIT,
   );
   const scanController = useRef<AbortController | null>(null);
+  const releaseLoadMoreRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const memorySnapshot = releaseMemoryCache.get(userId);
@@ -1206,6 +1208,9 @@ function ReleasesView({ userId }: { userId: string }) {
           fetchedAt: data.fetchedAt,
         };
         releaseMemoryCache.set(userId, snapshot);
+        if (snapshot.complete) {
+          await writeCachedReleaseSnapshot(userId, snapshot);
+        }
         setReleases(sorted);
         setArtistCount(total);
         setScannedArtists(scanned);
@@ -1507,28 +1512,25 @@ function ReleasesView({ userId }: { userId: string }) {
   useEffect(() => {
     if (renderedReleaseCount >= visibleCount) return;
 
-    const revealNextBatch = () => {
+    const loadNextBatch = () => {
       startTransition(() => {
         setReleaseRenderLimit((current) =>
           Math.min(current + RELEASE_RENDER_BATCH_SIZE, visibleCount),
         );
       });
     };
-    const idleWindow = window as Window & {
-      cancelIdleCallback?: (handle: number) => void;
-      requestIdleCallback?: (
-        callback: () => void,
-        options?: { timeout: number },
-      ) => number;
-    };
-    const idleHandle = idleWindow.requestIdleCallback?.(revealNextBatch, {
-      timeout: 800,
-    });
-    if (idleHandle !== undefined) {
-      return () => idleWindow.cancelIdleCallback?.(idleHandle);
-    }
-    const timeoutHandle = window.setTimeout(revealNextBatch, 80);
-    return () => window.clearTimeout(timeoutHandle);
+    const target = releaseLoadMoreRef.current;
+    if (!target || !("IntersectionObserver" in window)) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          loadNextBatch();
+        }
+      },
+      { rootMargin: "600px 0px" },
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
   }, [renderedReleaseCount, visibleCount]);
 
   const hasProgress = scannedArtists > 0;
@@ -1843,8 +1845,28 @@ function ReleasesView({ userId }: { userId: string }) {
             );
           })}
           {renderedReleaseCount < visibleCount && (
-            <div className="release-render-progress" role="status">
-              Preparing {visibleCount - renderedReleaseCount} more cached releases…
+            <div
+              className="release-render-progress"
+              ref={releaseLoadMoreRef}
+              role="status"
+            >
+              <span>
+                {visibleCount - renderedReleaseCount} more cached releases
+              </span>
+              <button
+                className="secondary-button"
+                onClick={() =>
+                  setReleaseRenderLimit((current) =>
+                    Math.min(
+                      current + RELEASE_RENDER_BATCH_SIZE,
+                      visibleCount,
+                    ),
+                  )
+                }
+                type="button"
+              >
+                Show more
+              </button>
             </div>
           )}
         </div>

@@ -59,6 +59,12 @@ const UNKNOWN_MONTH: ReleaseMonth = {
   key: "unknown",
   label: "Release date unknown",
 };
+const RELEASE_MONTH_FORMATTER = new Intl.DateTimeFormat("en", {
+  month: "long",
+  year: "numeric",
+  timeZone: "UTC",
+});
+const releaseMonthCache = new Map<string, ReleaseMonth>();
 
 /**
  * Converts Spotify's day-, month-, and year-precision release dates into a
@@ -73,15 +79,16 @@ export function releaseMonth(date?: string | null): ReleaseMonth {
     const [, year, month] = monthMatch;
     const monthNumber = Number(month);
     if (monthNumber >= 1 && monthNumber <= 12) {
+      const key = `${year}-${month}`;
+      const cached = releaseMonthCache.get(key);
+      if (cached) return cached;
       const parsed = new Date(`${year}-${month}-01T00:00:00Z`);
-      return {
-        key: `${year}-${month}`,
-        label: new Intl.DateTimeFormat("en", {
-          month: "long",
-          year: "numeric",
-          timeZone: "UTC",
-        }).format(parsed),
+      const monthInfo = {
+        key,
+        label: RELEASE_MONTH_FORMATTER.format(parsed),
       };
+      releaseMonthCache.set(key, monthInfo);
+      return monthInfo;
     }
   }
 

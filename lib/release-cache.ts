@@ -12,7 +12,9 @@ export const COMPLETE_RELEASE_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export const PARTIAL_RELEASE_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 const CACHE_PATH_PREFIX = "/__taditech-cache/releases/v1/";
+const COMPLETE_SNAPSHOT_QUERY = "complete-snapshot";
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
+const cacheGenerationByAccount = new Map<string, number>();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -251,6 +253,67 @@ function pageRequest(accountId: string, cursor: string | null): Request {
   return new Request(url, { method: "GET" });
 }
 
+function completeSnapshotRequest(accountId: string): Request {
+  const url = new URL(accountCachePath(accountId), window.location.origin);
+  url.searchParams.set("view", COMPLETE_SNAPSHOT_QUERY);
+  return new Request(url, { method: "GET" });
+}
+
+/**
+ * Stores a completed scan as one compact cache entry. Cursor pages remain in
+ * place for resumable scans, while completed reloads avoid replaying every
+ * historical page one by one.
+ */
+export async function writeCachedReleaseSnapshot(
+  accountId: string,
+  value: unknown,
+): Promise<boolean> {
+  const storage = browserCacheStorage();
+  const account = normalizedAccountId(accountId);
+  const snapshot = normalizeReleaseBatch(value);
+  if (!storage || !account || !snapshot?.complete) return false;
+
+  try {
+    const cache = await storage.open(RELEASE_CACHE_NAME);
+    await cache.put(
+      completeSnapshotRequest(account),
+      new Response(JSON.stringify(snapshot), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readCachedReleaseSnapshot(
+  accountId: string,
+  now: number,
+): Promise<ReleaseScanSnapshot | null> {
+  const storage = browserCacheStorage();
+  const account = normalizedAccountId(accountId);
+  if (!storage || !account) return null;
+
+  try {
+    const cache = await storage.open(RELEASE_CACHE_NAME);
+    const request = completeSnapshotRequest(account);
+    const response = await cache.match(request);
+    if (!response) return null;
+    const snapshot = normalizeReleaseBatch(await response.json());
+    if (
+      !snapshot?.complete ||
+      !releaseCacheIsFresh([snapshot], true, now)
+    ) {
+      await cache.delete(request);
+      return null;
+    }
+    return snapshot;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Writes only a normalized Spotify response page. Cache failures never fail a
  * release scan because this cache is an optional device-local accelerator.
@@ -306,6 +369,10 @@ export async function clearCachedReleaseScan(
   const storage = browserCacheStorage();
   const account = normalizedAccountId(accountId);
   if (!storage || !account) return false;
+  cacheGenerationByAccount.set(
+    account,
+    (cacheGenerationByAccount.get(account) ?? 0) + 1,
+  );
 
   try {
     const cache = await storage.open(RELEASE_CACHE_NAME);
@@ -330,6 +397,9 @@ export async function loadCachedReleaseScan(
   accountId: string,
   now = Date.now(),
 ): Promise<ReleaseScanSnapshot | null> {
+  const completeSnapshot = await readCachedReleaseSnapshot(accountId, now);
+  if (completeSnapshot) return completeSnapshot;
+
   const releases = new Map<string, Release>();
   const batches: ReleaseBatch[] = [];
   const seenCursors = new Set<string>();
@@ -376,7 +446,7 @@ export async function loadCachedReleaseScan(
   const fetchedAt = new Date(
     Math.max(...batches.map((batch) => Date.parse(batch.fetchedAt))),
   ).toISOString();
-  return {
+  const snapshot = {
     releases: Array.from(releases.values()).sort((a, b) =>
       b.release_date.localeCompare(a.release_date),
     ),
@@ -386,4 +456,18 @@ export async function loadCachedReleaseScan(
     complete,
     fetchedAt,
   };
+  const account = normalizedAccountId(accountId);
+  if (
+    snapshot.complete &&
+    account &&
+    typeof window.setTimeout === "function"
+  ) {
+    const generation = cacheGenerationByAccount.get(account) ?? 0;
+    window.setTimeout(() => {
+      if ((cacheGenerationByAccount.get(account) ?? 0) === generation) {
+        void writeCachedReleaseSnapshot(account, snapshot);
+      }
+    }, 1_500);
+  }
+  return snapshot;
 }

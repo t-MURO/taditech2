@@ -584,11 +584,20 @@ details.column-config > summary > span {
   grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 .release-render-progress {
+  align-items: center;
   color: var(--dim);
+  display: flex;
+  flex-wrap: wrap;
   font-family: var(--font-mono), monospace;
   font-size: 10px;
+  gap: 10px;
+  justify-content: center;
   padding: 2px 0 12px;
   text-align: center;
+}
+.release-render-progress .secondary-button {
+  min-height: 34px;
+  padding: 7px 11px;
 }
 .release-card {
   cursor: default;
