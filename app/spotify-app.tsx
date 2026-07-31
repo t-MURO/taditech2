@@ -956,6 +956,9 @@ function ReleaseCard({
 }) {
   const playback = usePlayback();
   const playbackKey = `album:${release.id}`;
+  const releaseUri = `spotify:album:${release.id}`;
+  const isCurrentRelease = playback.currentAlbumUri === releaseUri;
+  const isPlaying = isCurrentRelease && playback.isPlaying;
   const coverUrl = preferredSpotifyImage(release.images);
   const spotifyHref =
     spotifyAppHref({
@@ -966,7 +969,11 @@ function ReleaseCard({
 
   return (
     <article
-      className={`release-card ${selected ? "selected" : ""}`}
+      className={`release-card ${selected ? "selected" : ""} ${
+        isCurrentRelease
+          ? `current-release ${isPlaying ? "is-playing" : "is-paused"}`
+          : ""
+      }`}
       onClick={(event) => {
         const target = event.target as HTMLElement;
         if (target.closest("a, button, input, label")) return;
@@ -976,6 +983,19 @@ function ReleaseCard({
       <div className="cover-wrap">
         {coverUrl && (
           <img alt="" decoding="async" loading="lazy" src={coverUrl} />
+        )}
+        {isCurrentRelease && (
+          <div
+            aria-label={isPlaying ? "Currently playing" : "Currently paused"}
+            className="release-playing-status"
+          >
+            <span aria-hidden="true" className="release-playing-bars">
+              <i />
+              <i />
+              <i />
+            </span>
+            {isPlaying ? "Playing" : "Paused"}
+          </div>
         )}
         <label
           className="release-selector"
@@ -1001,7 +1021,7 @@ function ReleaseCard({
             disabled={!playback.deviceReady || Boolean(playback.pendingKey)}
             onClick={() =>
               void playback.play(
-                { contextUri: `spotify:album:${release.id}` },
+                { contextUri: releaseUri },
                 playbackKey,
               )
             }

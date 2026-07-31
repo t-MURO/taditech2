@@ -93,6 +93,7 @@ type PlayTarget = {
 type PlaybackControl = "next" | "pause" | "play" | "previous";
 type PlaybackContextValue = {
   authorized: boolean;
+  currentAlbumUri: string;
   currentTrackUri: string;
   deviceReady: boolean;
   isPlaying: boolean;
@@ -654,11 +655,13 @@ export function PlaybackProvider({
     !connecting &&
     Boolean(deviceId);
   const currentTrack = state?.track_window.current_track;
+  const currentAlbumUri = currentTrack?.album?.uri ?? "";
   const currentTrackUri = currentTrack?.uri ?? "";
   const isPlaying = Boolean(currentTrack && state && !state.paused);
   const value = useMemo<PlaybackContextValue>(
     () => ({
       authorized: authorized && !reconnectRequired,
+      currentAlbumUri,
       currentTrackUri,
       deviceReady,
       isPlaying,
@@ -669,6 +672,7 @@ export function PlaybackProvider({
     }),
     [
       authorized,
+      currentAlbumUri,
       currentTrackUri,
       deviceReady,
       isPlaying,

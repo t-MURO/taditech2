@@ -615,6 +615,68 @@ details.column-config > summary > span {
     0 0 0 2px var(--green),
     0 0 0 6px rgba(183,247,47,.11);
 }
+.release-card.current-release .cover-wrap {
+  box-shadow:
+    0 0 0 2px var(--green),
+    0 0 0 6px rgba(183,247,47,.16),
+    0 14px 34px rgba(0,0,0,.5),
+    0 0 30px rgba(183,247,47,.18);
+}
+.release-card.current-release.is-paused .cover-wrap {
+  box-shadow:
+    0 0 0 2px rgba(183,247,47,.68),
+    0 0 0 6px rgba(183,247,47,.08);
+}
+.release-card.current-release h3 a { color: var(--green); }
+.release-playing-status {
+  align-items: center;
+  background: rgba(8,11,9,.9);
+  border: 1px solid rgba(183,247,47,.55);
+  border-radius: 999px;
+  bottom: 9px;
+  box-shadow: 0 5px 18px rgba(0,0,0,.42);
+  color: var(--green);
+  display: flex;
+  font-family: var(--font-mono), monospace;
+  font-size: 9px;
+  font-weight: 700;
+  gap: 7px;
+  left: 9px;
+  letter-spacing: .08em;
+  padding: 7px 9px;
+  position: absolute;
+  text-transform: uppercase;
+  z-index: 2;
+}
+.release-playing-bars {
+  align-items: flex-end;
+  display: flex;
+  gap: 2px;
+  height: 11px;
+}
+.release-playing-bars i {
+  animation: release-playing-bar .62s ease-in-out infinite alternate;
+  background: currentColor;
+  border-radius: 1px;
+  display: block;
+  height: 100%;
+  transform-origin: bottom;
+  width: 2px;
+}
+.release-playing-bars i:nth-child(2) {
+  animation-delay: -.38s;
+}
+.release-playing-bars i:nth-child(3) {
+  animation-delay: -.17s;
+}
+.release-card.current-release.is-paused .release-playing-bars i {
+  animation-play-state: paused;
+  transform: scaleY(.3);
+}
+@keyframes release-playing-bar {
+  from { transform: scaleY(.28); }
+  to { transform: scaleY(1); }
+}
 .release-selector {
   cursor: pointer;
   left: 9px;
@@ -2196,4 +2258,5 @@ details.column-config > summary > span {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
   .scan-progress-track.indeterminate i { animation: none; transform: none; width: 34%; }
+  .release-playing-bars i { animation: none; transform: scaleY(.7); }
 }
