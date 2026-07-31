@@ -692,11 +692,15 @@ details.column-config > summary > span {
 }
 .playlist-search input::placeholder { color: var(--dim); }
 .playlist-list {
+  align-content: start;
   display: grid;
-  gap: 12px;
+  gap: 8px;
+  grid-auto-rows: max-content;
   min-height: 0;
+  overscroll-behavior: contain;
   overflow: auto;
   padding-right: 5px;
+  scrollbar-gutter: stable;
 }
 .playlist-list-empty {
   border: 1px dashed var(--line);
@@ -710,18 +714,24 @@ details.column-config > summary > span {
   align-items: center;
   background: rgba(255,255,255,0.025);
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 10px;
   cursor: pointer;
   display: grid;
-  gap: 18px;
-  grid-template-columns: 62px 1fr auto;
-  padding: 10px;
+  gap: 12px;
+  grid-template-columns: 46px minmax(0, 1fr) auto;
+  min-height: 62px;
+  padding: 7px 9px;
   text-align: left;
   width: 100%;
 }
 .playlist-row:hover, .playlist-row.selected { background: rgba(255,255,255,0.055); border-color: rgba(255,255,255,0.2); }
 .playlist-row:disabled { cursor: wait; opacity: .62; }
-.playlist-row img, .playlist-cover-placeholder { border-radius: 7px; height: 62px; object-fit: cover; width: 62px; }
+.playlist-row img, .playlist-cover-placeholder {
+  border-radius: 6px;
+  height: 46px;
+  object-fit: cover;
+  width: 46px;
+}
 .playlist-cover-placeholder {
   align-items: center;
   background: var(--panel-2);
@@ -730,8 +740,8 @@ details.column-config > summary > span {
   justify-content: center;
 }
 .playlist-row h3 {
-  font-size: 15px;
-  margin: 0 0 6px;
+  font-size: 14px;
+  margin: 0 0 3px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
